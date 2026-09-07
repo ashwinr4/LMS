@@ -1,0 +1,45 @@
+{
+  "name": "esmms-server",
+  "version": "1.0.0",
+  "description": "Enterprise Secure Module Management System - Backend Server",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:seed": "node prisma/seed.js"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "^7.10.0",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "^4.22.1",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.12.2",
+    "multer": "^2.2.0",
+    "mysql2": "^3.11.0",
+    "nodemailer": "^6.10.1",
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.19.1",
+    "pg": "^8.13.0",
+    "prisma": "^7.10.0",
+    "socket.io": "^4.8.3",
+    "winston": "^3.19.0",
+    "xlsx": "^0.18.5",
+    "xss": "^1.0.15",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

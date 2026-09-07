@@ -1,0 +1,184 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-slate-100 text-gray-900;
+    font-size: 0.9375rem;
+    line-height: 1.5;
+  }
+
+  .dark body {
+    @apply bg-dark-bg text-dark-text;
+  }
+
+  *:focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-0;
+  }
+
+  /* Gentle boost to ultra-small hardcoded micro labels so they are never unreadable */
+  .text-\[10px\] {
+    font-size: 11.5px !important;
+    line-height: 15px !important;
+  }
+  .text-\[11px\] {
+    font-size: 12.5px !important;
+    line-height: 16px !important;
+  }
+}
+
+@layer components {
+  /* Dynamic surface utility helpers that adapt cleanly across themes */
+  .bg-app {
+    @apply bg-slate-100 dark:bg-dark-bg;
+  }
+  .bg-card {
+    @apply bg-white dark:bg-dark-surface;
+  }
+  .bg-elevated {
+    @apply bg-slate-50 dark:bg-dark-elevated;
+  }
+  .text-app {
+    @apply text-gray-900 dark:text-dark-text;
+  }
+  .text-app-secondary {
+    @apply text-slate-600 dark:text-dark-text-secondary;
+  }
+  .text-app-muted {
+    @apply text-slate-400 dark:text-dark-text-muted;
+  }
+  .border-app {
+    @apply border-slate-300 dark:border-dark-border;
+  }
+  .border-app-strong {
+    @apply border-slate-400 dark:border-dark-border-strong;
+  }
+
+  /* Sidebar utility aliases */
+  .bg-sidebar {
+    background-color: #172A46;
+  }
+  .bg-sidebar-hover {
+    background-color: #1E3A5F;
+  }
+  .bg-sidebar-active {
+    background-color: #244670;
+  }
+  .border-sidebar-border {
+    border-color: #26405F;
+  }
+  .text-sidebar-text {
+    color: #B8C5D9;
+  }
+  .text-sidebar-text-bright {
+    color: #FFFFFF;
+  }
+  .text-sidebar-muted {
+    color: #6B7A91;
+  }
+  .shadow-dialog {
+    box-shadow: 0 12px 32px rgba(0,0,0,0.12), 0 4px 8px rgba(0,0,0,0.06);
+  }
+
+  /* Custom thin scrollbar */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 dark:bg-dark-border rounded-full;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-400 dark:bg-dark-border-strong;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════ */
+/* ANIMATEICONS.IN MICRO-ANIMATIONS                               */
+/* ══════════════════════════════════════════════════════════════ */
+@keyframes iconRocketLaunch {
+  0% { transform: translateY(0) scale(1); }
+  35% { transform: translateY(-3px) scale(1.1) rotate(-8deg); }
+  65% { transform: translateY(1px) scale(0.95) rotate(4deg); }
+  100% { transform: translateY(0) scale(1) rotate(0); }
+}
+
+@keyframes iconSpinPlus {
+  0% { transform: rotate(0) scale(1); }
+  50% { transform: rotate(90deg) scale(1.15); }
+  100% { transform: rotate(90deg) scale(1); }
+}
+
+@keyframes iconTrashFlip {
+  0% { transform: rotate(0); }
+  30% { transform: translateY(-2px) rotate(-15deg); }
+  70% { transform: translateY(-1px) rotate(8deg); }
+  100% { transform: rotate(0); }
+}
+
+@keyframes iconBellSwing {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(14deg); }
+  40% { transform: rotate(-12deg); }
+  60% { transform: rotate(8deg); }
+  80% { transform: rotate(-4deg); }
+}
+
+@keyframes iconCheckPop {
+  0% { transform: scale(0.8); opacity: 0; }
+  60% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes iconPulseRing {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 0.4; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.group:hover .animate-icon-rocket,
+button:hover .animate-icon-rocket {
+  animation: iconRocketLaunch 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.group:hover .animate-icon-plus,
+button:hover .animate-icon-plus {
+  animation: iconSpinPlus 0.35s ease-out forwards;
+}
+
+.group:hover .animate-icon-trash,
+button:hover .animate-icon-trash {
+  animation: iconTrashFlip 0.45s ease-in-out;
+}
+
+.group:hover .animate-icon-bell,
+button:hover .animate-icon-bell {
+  animation: iconBellSwing 0.6s ease-in-out;
+}
+
+.animate-icon-check {
+  animation: iconCheckPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.animate-icon-pulse {
+  animation: iconPulseRing 2s infinite ease-in-out;
+}
+
+/* Micro-transitions for theme toggling */
+.theme-transition,
+.theme-transition * {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease;
+}

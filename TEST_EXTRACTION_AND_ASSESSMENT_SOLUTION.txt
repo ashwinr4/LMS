@@ -1,0 +1,254 @@
+================================================================================
+QUALIVA LMS - SECTION & FINAL TEST ARCHITECTURE WITH DOCX/PDF QUESTION EXTRACTION
+================================================================================
+Document Type: Technical Solution & Implementation Architecture
+Author: Antigravity AI Engine
+Audience: Course Creators, Platform Admins, Security Engineers, and Developers
+Status: Architectural Solution & Security Specification (No Code Executed)
+================================================================================
+
+1. CORE REQUIREMENTS OVERVIEW
+--------------------------------------------------------------------------------
+1.1. Optional Section Tests:
+     - Each section in the curriculum can optionally have a Knowledge Check / Section Test.
+     - Managed directly from within each section's header in Course Studio.
+
+1.2. Compulsory Final Examination:
+     - Every course MUST have a comprehensive Final Course Examination at the end.
+     - The course cannot be published until the Final Exam is configured.
+
+1.3. Universal Extraction Tolerance:
+     - Documents may originate from diverse, unpredictable sources:
+       * AI-generated test banks (ChatGPT, Claude, DeepSeek with Markdown formatting)
+       * Hand-typed human documents (inconsistent spacing, varying delimiters)
+       * Downloaded university/educational test papers (consolidated end-keys, tables)
+     - The system must robustly normalize and extract questions from ALL these sources.
+
+1.4. Multi-Layer Security & Vulnerability Defense:
+     - Pre-parsing deep security inspection for malicious code, macros, and exploits.
+     - Documents containing harmful payloads (PDF JavaScript, Word VBA macros, XXE,
+       XSS vectors) are automatically blocked, ignored, and quarantined.
+
+1.5. Ironclad Student Security & Privacy:
+     - The original PDF/Word file is stored in private storage and NEVER exposed to students.
+     - Answer keys and explanations are completely stripped from student test payloads.
+     - The backend computes the final score securely upon submission.
+
+1.6. Creator & Admin Configuration:
+     - Configurable Question Sampling: e.g., Upload a bank of 50 questions; the system
+       randomly presents 15 unique questions per student test attempt.
+     - Configurable Pass Threshold Percentage: e.g., 75%, 80%, editable by Course Creator
+       and Admin only.
+     - Configurable Time Limit and Retake Attempt limits.
+
+
+================================================================================
+2. ENTERPRISE DOCUMENT SECURITY & VULNERABILITY DEFENSE PIPELINE
+================================================================================
+Before any text parsing occurs, the uploaded file passes through an automated
+4-stage security gate. If any vulnerability or malicious artifact is identified,
+the document is REJECTED, IGNORED, and a clear security audit event is logged.
+
+2.1. Stage 1: File Integrity & Magic Byte Signature Verification
+--------------------------------------------------------------------------------
+- Prevents file extension spoofing (e.g., renaming an `.exe` or `.bat` to `.pdf`).
+- Inspects the true file header bytes:
+  * PDF Magic Number: `%PDF-` (bytes `25 50 44 46`)
+  * DOCX Magic Number: PKZip signature (`50 4B 03 04`) with valid XML structures.
+- File size boundary validation: Maximum 50MB per document.
+
+2.2. Stage 2: Deep Structure & Exploit Scan
+--------------------------------------------------------------------------------
+A) PDF Exploit Prevention:
+   - Inspects the PDF stream for malicious interactive objects:
+     * `/JavaScript` or `/JS` (embedded script execution)
+     * `/Launch` (arbitrary command/application execution)
+     * `/OpenAction` or `/AA` (automatic payload trigger on open)
+     * `/EmbeddedFiles` (hidden binaries packed inside PDF)
+   - Action: Any occurrence of `/Launch`, `/JavaScript`, or unauthorized streams
+     causes the file to be immediately rejected with:
+     "Upload Rejected: Document contains unauthorized executable scripts or actions."
+
+B) Word (.doc / .docx) Threat Neutralization:
+   - Macro/VBA Exploit Check:
+     * Inspects DOCX archive for `word/vbaProject.bin` or macro automation streams.
+     * Macro-enabled files (`.docm`, files with VBA macros) are strictly prohibited.
+   - XML External Entity (XXE) Injection Prevention:
+     * Safe XML parser configuration with external DTD resolution completely disabled.
+   - Dynamic Data Exchange (DDE) Sanitization:
+     * Scans for DDE injection vectors (`{DDE...}`, `{DDEAUTO...}`) and rejects them.
+
+2.3. Stage 3: Text Sanitization & Stored XSS Prevention
+--------------------------------------------------------------------------------
+- All extracted strings pass through an enterprise sanitization filter:
+  * Strips potential XSS vectors: `<script>`, `<iframe>`, `javascript:`, `onerror=`, `onload=`.
+  * Escapes unsafe HTML characters before saving to the database.
+  * Neutralizes prompt injection payloads (e.g., "Ignore previous system instructions...").
+
+2.4. Stage 4: Secure Quarantine & Platform Logging
+--------------------------------------------------------------------------------
+- Malicious files are deleted immediately from memory/temporary buffers.
+- An Audit Log entry is created:
+  `SECURITY_ALERT: Malicious file upload attempted by User [ID] - Reason: [VBA Macro / PDF JS Detected]`.
+
+
+================================================================================
+3. UNIVERSAL EXTRACTION ENGINE (AI, HAND-TYPED & WEB-DOWNLOADED)
+================================================================================
+To handle AI-generated, hand-typed, or web-downloaded files, the parser uses an
+adaptive 3-stage normalization pipeline.
+
+3.1. Document Pre-Processor & Normalizer:
+--------------------------------------------------------------------------------
+- Strips document noise: Page numbers ("Page 1 of 12"), headers, footers, watermarks.
+- Normalizes character encodings: Converts smart quotes (`”`, `“`), em-dashes (`—`),
+  and non-breaking spaces into standard UTF-8 characters.
+- Strips AI Markdown formatting: Normalizes `**Question 1:**`, `### Question`,
+  and bullet points (`*`, `-`, `•`).
+
+3.2. Dual-Mode Answer Architecture:
+--------------------------------------------------------------------------------
+The extractor accommodates the two most common exam formats automatically:
+
+Format Mode A: Inline Answers (Common in AI-Generated & Study Guides)
+- Each question is followed immediately by its options and answer key:
+  Example:
+    1. What is Docker containerization?
+       A) Hardware virtualization
+       B) OS-level virtualization
+       C) Cloud storage system
+       D) Network protocol
+       Answer: B
+       Explanation: Docker packages apps into OS-level containers.
+
+Format Mode B: End-of-Document Answer Key (Common in Downloaded Academic Exams)
+- Questions 1 to N are listed continuously in the body.
+- An Answer Key table or list appears at the end of the document:
+  Example at end of file:
+    "ANSWER KEY: 1-B, 2-A, 3-D, 4-C..." or
+    "1. B | 2. A | 3. D | 4. C"
+- The extractor automatically correlates the end key with the corresponding questions.
+
+3.3. Flexible Pattern Matchers:
+--------------------------------------------------------------------------------
+- Question Statements:
+  Matches: `1.`, `1)`, `Q1.`, `Q1:`, `Question 1:`, `**1.**`, `1 -`
+- Options (A, B, C, D):
+  Matches: `A)`, `A.`, `(A)`, `[A]`, `a)`, `a.`, `* A)`, `- (A)`
+- Answer Keys:
+  Matches: `Answer: B`, `Ans: B`, `Correct: B`, `Correct Answer: Option (B)`,
+           `Key: B`, `Answer is B`, `**Answer:** B`
+- Explanations:
+  Matches: `Explanation: ...`, `Rationale: ...`, `Note: ...`
+
+
+================================================================================
+4. USER EXPERIENCE & WORKFLOW ARCHITECTURE
+================================================================================
+
+4.1. Course Creator Studio Layout:
+--------------------------------------------------------------------------------
+A) Per-Section Controls:
+   - Next to [+ Add Lecture] in each section header, an [+ Add Section Test] button is available.
+   - If a test exists, it displays an Assessment pill:
+     "Section Test: 10 Questions · 80% Pass Threshold [Manage Test] [Delete]"
+
+B) Compulsory Final Course Exam Card:
+   - Placed at the bottom of the curriculum, beneath all sections:
+     ┌────────────────────────────────────────────────────────────────────────┐
+     │ 🏁 Final Course Examination (Compulsory)                      [Draft]  │
+     │ Comprehensive assessment covering all sections before certification.   │
+     │ ---------------------------------------------------------------------- │
+     │ Status: Configured (25 Questions from 60 Question Pool · 80% Pass)     │
+     │ [Upload / Update Exam File]  [Configure Rules]  [Preview Student View] │
+     └────────────────────────────────────────────────────────────────────────┘
+
+4.2. Creator & Admin Test Setup Modal:
+--------------------------------------------------------------------------------
+Step 1: Document Upload & Security Check
+   - Drag & drop zone for `.pdf`, `.docx`, or `.doc` question bank file.
+   - Real-time security scan runs instantly (checks magic bytes, macros, scripts).
+   - If safe, proceeds to extraction; if unsafe, displays security warning and halts.
+
+Step 2: Interactive Verification Table
+   - Displays all parsed questions, choices, and detected answer keys.
+   - Creator/Admin can:
+     * Review each parsed question.
+     * Click to change the correct option if a typo was in the source document.
+     * Edit question text or delete malformed items.
+     * Add manual questions if desired.
+
+Step 3: Test Rules Configuration (Creator & Admin Only)
+   - Number of Questions Given to Student: e.g., 10 questions (randomly chosen).
+   - Passing Threshold Percentage: e.g., 80% (editable slider / number input).
+   - Time Limit: e.g., 30 minutes (or untimed).
+   - Max Attempts Allowed: e.g., 3 attempts (or unlimited).
+
+
+================================================================================
+5. STUDENT SECURITY & EXAM PRIVACY SPECIFICATION
+================================================================================
+
+5.1. Payload Sanitization (Server-Side):
+--------------------------------------------------------------------------------
+When a student initiates an exam attempt (`GET /api/assessments/:id/take`):
+1. The server samples `questionsPerAttempt` questions randomly from the pool.
+2. The server creates an `AssessmentSubmission` session record in the DB with the selected question IDs.
+3. The server strips all sensitive fields before responding to the student:
+   - `correctOption` is REMOVED.
+   - `explanation` is REMOVED.
+   - Original PDF/Word file path is NEVER sent.
+4. Response sent to student:
+   {
+     "examId": "...",
+     "title": "Module 1 Final Examination",
+     "timeLimitMinutes": 30,
+     "passingScore": 80,
+     "totalQuestions": 10,
+     "questions": [
+       { "id": "q1", "text": "What is...", "options": ["A...", "B...", "C...", "D..."] }
+     ]
+   }
+
+5.2. Secure Grading & Submission:
+--------------------------------------------------------------------------------
+1. Student submits their chosen answer indices:
+   `POST /api/assessments/:id/submit` with `{ answers: { "q1": 2, "q2": 0, ... } }`
+2. Server validates answers against the database `correctOption` for that session.
+3. Calculates exact percentage: `(correctCount / totalQuestions) * 100`.
+4. Checks if percentage >= `passingScore`.
+5. Updates student's assignment/certificate eligibility.
+
+
+================================================================================
+6. DATABASE SCHEMA MAPPING (PRISMA)
+================================================================================
+
+- `Assessment` model:
+  * `id`: UUID
+  * `moduleId`: Course ID
+  * `sectionId`: Section ID (NULL if this is the Final Course Exam)
+  * `isFinalExam`: Boolean (true for course-level, false for section-level)
+  * `title`: String
+  * `passingScore`: Int (e.g., 80 for 80%)
+  * `questionsPerAttempt`: Int (e.g., 10 questions randomly sampled)
+  * `timeLimitMinutes`: Int? (e.g., 30)
+  * `questions`: AssessmentQuestion[]
+
+- `AssessmentQuestion` model:
+  * `id`: UUID
+  * `assessmentId`: Foreign Key
+  * `questionText`: String
+  * `options`: String (JSON array of strings: ["Option A", "Option B", ...])
+  * `correctOption`: Int (Index: 0, 1, 2, or 3)
+  * `explanation`: String? (Explanation revealed only post-grading)
+
+
+================================================================================
+7. ACCESS CONTROL & ROLE PERMISSIONS
+================================================================================
+- Platform Admin: Full rights to view, create, edit, upload, and override passing thresholds and questions.
+- Course Creator: Full rights to add, upload, edit, and configure tests on their authored courses.
+- Moderator: Read-only access to inspect test quality and audit logs.
+- Student: Strictly sees the sanitized test interface during an active attempt.
+================================================================================

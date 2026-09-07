@@ -1,0 +1,146 @@
+# Change 1: 2FA OTP Login, Multi-Modal Course Studio & Anti-Skip Player
+
+Implements mandatory 2FA OTP verification for all email/password logins, automated first-time welcome email dispatch via Gmail SMTP, Course Creator studio overhaul with multi-modal content authoring (Video default with auto-duration detection, PDF, Word, Image) via clean dropdown, and Student Player forward-seek anti-skip enforcement with real-time progression tracking.
+
+## User Review Required
+
+> [!IMPORTANT]
+> - **Mandatory OTP on Every Login**: Every email/password sign-in will now require a 6-digit verification passcode dispatched to the user's registered email via Gmail SMTP before granting access to dashboards.
+> - **Automated Welcome Email**: Dispatched automatically to the user's inbox upon their first-time successful OTP login after registration.
+> - **Course Creator Terminology**: Rebrands all creator views from *"Modules"* to **"Courses"**.
+> - **Anti-Skip Protection**: Students will be strictly prevented from fast-forwarding or skipping uncompleted video lectures. Subsequent lectures remain locked (🔒) until the current lecture is 100% completed.
+
+---
+
+## Proposed Changes
+
+### Component 1: Authentication & Email Delivery Engine
+
+#### [MODIFY] [server/src/utils/email.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/utils/email.js)
+- Add `sendWelcomeEmail(toEmail, userName, role)` with branded HTML template for first-time login onboarding.
+- Ensure `sendOtpEmail(toEmail, otpCode, userName)` supports login verification and registration verification.
+
+#### [MODIFY] [server/src/controllers/authController.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/controllers/authController.js)
+- **`login` controller**: Validate email & password, generate 6-digit OTP, store in database with 10-minute expiry, dispatch OTP via `sendOtpEmail`, and return `{ requiresOtp: true, email }` without issuing tokens.
+- **`verifyOtp` controller**: Validate OTP; on success, check `user.isFirstLogin`. If `true`, dispatch `sendWelcomeEmail` and update `isFirstLogin = false`. Issue JWT access token and HttpOnly refresh cookie.
+- **`googleLogin` controller**: On initial registration via Google, dispatch initial 1-time verification OTP; subsequent Google logins authenticate directly.
+
+#### [MODIFY] [client/src/context/AuthContext.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/context/AuthContext.jsx)
+- Update `login` method to handle the `{ requiresOtp: true, email }` challenge state.
+- Add `verifyLoginOtp(email, otp)` method to complete login and save session.
+
+#### [MODIFY] [client/src/pages/public/Login.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/public/Login.jsx)
+- Introduce a clean 2-step state:
+  1. Step 1: Email & Password form + Google SSO button at the bottom.
+  2. Step 2: 6-Digit OTP Verification Screen with auto-focus inputs, resend code timer, and "Back to Login" option.
+
+---
+
+### Component 2: Course Creator Studio & Multi-Modal Content Authoring
+
+#### [MODIFY] [client/src/pages/creator/CourseStudio.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/creator/CourseStudio.jsx)
+- Rebrand all headers and labels from *"Course Authoring Studio / Module"* to **"Course Studio"**.
+- Update **"+ Add Lecture"** modal to feature a single **Content Type Dropdown**:
+  - `🎬 Video Lecture` (Default)
+  - `📄 PDF Document`
+  - `📝 Word / Reading Document`
+  - `🖼️ Image / Diagram`
+- **Dynamic Media Upload & Auto Duration Detection**:
+  - When a video file or URL is chosen, load metadata (`video.onloadedmetadata`) to compute exact duration in minutes/seconds automatically (no manual duration inputs).
+  - Display live green badge: `✓ Detected Length: XX mins YY secs`.
+  - For PDF: File uploader or document link.
+  - For Word/Reading: Rich text/markdown content editor.
+  - For Image: High-res diagram/image uploader with thumbnail preview.
+
+#### [MODIFY] [client/src/pages/creator/CreatorDashboard.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/creator/CreatorDashboard.jsx)
+- Update all metric cards and table labels from "Modules" to "Courses".
+
+#### [MODIFY] [server/src/controllers/moduleController.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/controllers/moduleController.js)
+- Ensure lesson creation and update endpoints support multi-modal `contentType` (`VIDEO`, `PDF`, `DOCUMENT`, `IMAGE`), auto-detected `duration` (in seconds/minutes), `mediaUrl`, and `textContent`.
+
+---
+
+### Component 3: Student Learning Player & Anti-Skip Sequential Engine
+
+#### [MODIFY] [client/src/pages/student/LearningPlayer.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/student/LearningPlayer.jsx)
+- **Live Real-Time Progression Bar**:
+  - Render an active, smooth progress bar under the media player displaying real-time playback: `Lecture Progress: 45% (06:30 / 14:28)`.
+  - Overall course header progress bar: `3 of 8 Lectures Completed (37.5%)`.
+- **Anti-Skip Forward-Seeking Lock**:
+  - Maintain `maxWatchedTime`. Intercept `onSeeking` / `onTimeUpdate` events on the HTML5 video element.
+  - If the student attempts to drag forward past `maxWatchedTime`, immediately snap back to `maxWatchedTime` and show a non-intrusive tooltip: *"Please finish watching to advance."*
+  - Backward seeking (rewind) is permitted.
+- **Strict Sequential Unlocking**:
+  - Lock subsequent lectures in the curriculum sidebar with 🔒 icons.
+  - On video completion (`onEnded` / 100%), send completion API call to backend, update progress to 100% (✅), and auto-unlock the next sequential lecture.
+- **Multi-Modal Viewer**:
+  - Render native Video Player for `VIDEO`, embedded viewer for `PDF`, readable typography for `DOCUMENT`, and zoomable image viewer for `IMAGE`.
+
+---
+---
+
+# Change 2: Course Creator Panel Polish, Navigation Fixes & Platform Performance Optimization
+
+Addresses specific usability issues in the Course Creator panel, navigation routing bugs, static demo notification cleanup, and platform-wide performance optimizations while preserving a minimal, lightweight, and user-friendly interface.
+
+## User Review Required
+
+> [!IMPORTANT]
+> - **Minimalist & User-Friendly UI**: All new features and workflows are kept strictly minimal, non-cluttered, and faithful to the existing design system without adding complex multi-step wizards or visual noise.
+> - **Accurate Sidebar Active States**: Ensures exact matching so only the currently active tab is highlighted (e.g. *Student Review Queue* on `/creator/requests`).
+> - **Real-Time Dynamic Badges**: Replaces all hardcoded badge numbers (e.g. the static `7`) with live database queries (hidden when count is 0).
+> - **Platform Speed & Responsiveness**: Sub-30ms API responses through non-blocking asynchronous backup database replication, warm connection pooling, and client-side data caching.
+
+---
+
+## Proposed Changes for Change 2
+
+### Component 1: Sidebar Navigation & Active Route Highlighting
+
+#### [MODIFY] [client/src/components/layout/AppShell.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/components/layout/AppShell.jsx)
+- **Exact Path Matching**: Fix route matching logic for sidebar navigation items (`location.pathname === item.path`) so parent routes like `/creator` do not stay permanently highlighted when visiting child pages like `/creator/requests` or `/creator/courses`.
+- **Dynamic Badge Counts**: Replace hardcoded badge values (`badge: 7`) with dynamic state fetched from live backend endpoints. If pending count is 0, completely omit the badge.
+- **Notification Bell Trigger**: Only display the active notification indicator dot if real, unread notifications exist for the authenticated user.
+
+---
+
+### Component 2: Unified Course Creation & Management Workflow
+
+#### [MODIFY] [client/src/pages/creator/CreatorCourses.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/creator/CreatorCourses.jsx)
+- **Streamlined Hub**: Rebrand the page to **"My Authored Courses"** displaying a clean, minimal list of courses created by the instructor with student enrollment stats, rating, and status.
+- **Direct "+ Create New Course" Integration**: Replace the static *"Create New Module"* button with a quick 4-field creation modal (Code, Title, Department, Description) that immediately creates the course and navigates directly into the **Course Studio** (`/creator/studio`) to start uploading videos, PDFs, reading notes, and adding sections.
+
+#### [MODIFY] [client/src/pages/creator/CourseStudio.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/creator/CourseStudio.jsx)
+- Ensure direct course selection when navigated from "My Courses".
+- Maintain the single, clean **Content Type Dropdown** (Video Lecture default with automatic duration detection, PDF Document, Word/Reading Article, and Diagram Image).
+
+---
+
+### Component 3: Platform Performance & Latency Optimization
+
+#### [MODIFY] [server/src/utils/prisma.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/utils/prisma.js)
+- **Asynchronous Non-Blocking Dual-Write**: Detach backup database replication to run in the background via `setImmediate` / asynchronous worker so that primary database requests return to the browser in **< 25ms** without blocking the user interface.
+- **Optimized Connection Pool**: Set connection pool parameters (`max: 20`, `idleTimeoutMillis: 30000`) for low-latency queries on Neon PostgreSQL.
+
+#### [MODIFY] [client/src/services/api.js](file:///c:/Users/Ashwin/Desktop/LMS/client/src/services/api.js)
+- Implement lightweight client-side memory caching for static course catalog and user profile queries to eliminate redundant network roundtrips during tab switching.
+
+---
+
+## Verification Plan for Change 2
+
+### Automated Tests
+- Production client build: `npm run build` to verify zero JSX or bundle errors.
+- Server response benchmarks: Verify API response times under 30ms.
+
+### Manual Verification
+1. **Sidebar Navigation Test**:
+   - Navigate to `/creator/requests` (Student Review Queue). Verify **only** *Student Review Queue* is highlighted and *Creator Studio* is not hovered/active.
+   - Navigate to `/creator/courses` (My Courses). Verify only *My Courses* is highlighted.
+2. **Course Creation Test**:
+   - In "My Courses", click **"+ Create New Course"**. Fill out the 4 fields and verify you are immediately placed into the Course Studio with the new course active to add sections and multi-modal lectures.
+3. **Notification & Badge Test**:
+   - Verify that when pending reviews count is 0, the `Student Review Queue` badge is completely hidden (no static `7`).
+   - Verify top notification bell only illuminates on real unread notifications.
+4. **Performance Benchmark**:
+   - Verify instant, snappy transitions between tabs and sub-second course saving actions.

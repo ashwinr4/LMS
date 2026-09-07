@@ -1,0 +1,81 @@
+# Implementation Plan: Section Tests & Final Course Exam with Secure Document Extraction
+
+Build the assessment architecture for the Qualiva Course Creator Studio and Student learning workflow:
+1. **Optional Section Tests** for each curriculum section.
+2. **Compulsory Final Examination** at the end of the course.
+3. **Secure Document Extraction Engine** for `.pdf` and `.docx` question banks with 4-stage anti-malware and vulnerability scanning.
+4. **Creator & Admin Rule Configuration** (random question sampling pool, pass threshold percentage, timer, attempts).
+5. **Anti-Cheating Student Assessment Experience** (zero answer leaks, sanitized payloads, server-side grading).
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> - **Pure JavaScript Only**: All server and client code will be written in pure standard JavaScript (no TypeScript).
+> - **Compulsory Final Exam Rule**: When creating or publishing a course, the Final Exam is mandatory. A course in DRAFT mode can be saved, but publishing to ACTIVE requires the Final Exam to be configured.
+> - **UI Aesthetic**: Professional, sleek, and minimal design matching the Qualiva Royal Blue theme with AnimateIcons micro-interactions and zero clutter.
+
+---
+
+## Proposed Architecture & Changes
+
+### 1. Backend Server Layer
+
+#### [MODIFY] [server/package.json](file:///c:/Users/Ashwin/Desktop/LMS/server/package.json)
+- Add lightweight, pure JS extraction libraries:
+  - `mammoth`: Fast, pure-JS `.docx` document extractor.
+  - `pdf-parse`: Pure-JS PDF text extractor.
+
+#### [NEW] [server/src/utils/documentScanner.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/utils/documentScanner.js)
+- 4-Stage Security Verification:
+  1. Magic Byte Signature Validation (`%PDF-`, PKZip for `.docx`).
+  2. PDF Exploit Scan: Detects and rejects `/JavaScript`, `/JS`, `/Launch`, `/EmbeddedFiles`, `/OpenAction`.
+  3. DOCX Threat Scan: Checks for VBA Macros (`vbaProject.bin`), DDE payloads, and disables external entity expansion (XXE).
+  4. Text Sanitizer: Neutralizes `<script>`, `<iframe>`, and prompt injection attacks.
+
+#### [NEW] [server/src/utils/questionExtractor.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/utils/questionExtractor.js)
+- Universal parser that normalizes:
+  - AI-generated Markdown (bolded questions, list bullets, etc.).
+  - Hand-typed human documents (inconsistent delimiters like `1.`, `Q1:`, `1)`).
+  - Web-downloaded exam papers with consolidated end-of-file answer keys.
+- Outputs structured `{ questionText, options: [A, B, C, D], correctOption: 0..3, explanation }`.
+
+#### [MODIFY] [server/src/controllers/assessmentController.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/controllers/assessmentController.js)
+- Add secure upload & extraction endpoint (`POST /api/assessments/extract`).
+- Add endpoint to save section/final exam assessments (`POST /api/assessments`).
+- Update student take endpoint (`GET /api/assessments/:id/take`) with question sampling and strict payload sanitization (strip `correctOption` and `explanation`).
+- Add grading logic (`POST /api/assessments/:id/submit`) comparing against session questions and pass threshold.
+
+---
+
+### 2. Frontend Client Layer
+
+#### [NEW] [client/src/components/creator/AssessmentSetupModal.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/components/creator/AssessmentSetupModal.jsx)
+- Minimal, enterprise-grade modal matching the Qualiva theme:
+  - Step 1: Upload Question Bank (`.pdf`, `.docx`) with instant security scan progress.
+  - Step 2: Interactive Questions Table where creators can review parsed questions, edit statements, or toggle correct answer radio buttons.
+  - Step 3: Test Rules (Pass Threshold %, Questions per Student Attempt, Time Limit).
+
+#### [MODIFY] [client/src/pages/creator/CourseStudio.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/creator/CourseStudio.jsx)
+- In curriculum section header: Add `[+ Add Section Test]` (or `[Manage Test]` if configured).
+- At the bottom of the curriculum: Add the **`🏁 Final Course Examination (Compulsory)`** card.
+- Wire up the publish validation so the creator is prompted to set up the Final Exam before publishing.
+
+#### [MODIFY] [client/src/pages/student/ExamRoom.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/student/ExamRoom.jsx) & [LearningPlayer.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/student/LearningPlayer.jsx)
+- Ensure the student sees the clean exam interface for both Section Tests and the Final Exam, with auto-timer, progress tracker, and server-validated results.
+
+---
+
+## Verification Plan
+
+### Automated Build & Test
+- Run `npm run build` in `client` to verify 0 syntax or bundling errors.
+- Test document security scanner against safe sample files and verify rejection of macro/script files.
+
+### Manual End-to-End Verification
+1. Log in as Course Creator (`thefallenx8@gmail.com`).
+2. Navigate to Course Studio (`/creator/studio`).
+3. Click `[+ Add Section Test]` on Section 1 -> upload a sample question bank -> verify extracted questions and configure 80% passing score.
+4. Verify the `Final Course Examination` card at the bottom of the studio.
+5. Log in as a Student -> take the Section Test -> confirm questions appear with NO answers visible -> submit and verify grading.

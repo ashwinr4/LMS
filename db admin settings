@@ -1,0 +1,120 @@
+# Implementation Plan: Profile Page & Admin Database Settings
+
+Implement a universal **Profile Page** for all users, an **Admin-Only Settings Page** for configuring Primary and Secondary databases with live connection testing, and update the **Top-Right** and **Bottom-Left** account menus with Profile and Settings icons.
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Security & RBAC Enforcement**:
+> 1. The **Settings Page** (`/admin/settings`) and all database management endpoints are strictly restricted to `ADMIN` users. Students, Course Creators, and Moderators cannot see the Settings icon or access database connection strings.
+> 2. On the **Profile Page** (`/profile`), users may **only edit their Full Name and Profile Picture/Avatar**. Email, System Role, Department, and Account Status are read-only and managed by the platform.
+> 3. Database URL updates will include a pre-flight connection test before saving, preventing invalid connection strings from disrupting the backend.
+
+---
+
+## Proposed Changes
+
+### Component Architecture & Navigation
+
+```
+                       User Account Interaction
+                                 │
+         ┌───────────────────────┴───────────────────────┐
+         ▼                                               ▼
+  [Top-Right Avatar Dropdown]               [Bottom-Left Sidebar Footer]
+  • Profile Icon  -> /profile               • Profile Icon  -> /profile
+  • Settings Icon -> /admin/settings (ADMIN)• Settings Icon -> /admin/settings (ADMIN)
+  • Sign Out                                • Sign Out
+```
+
+---
+
+### Backend Components
+
+#### 1. Profile Controller & Route
+#### [NEW] `server/src/controllers/userProfileController.js` & [MODIFY] `server/src/routes/authRoutes.js`
+* `GET /api/v1/auth/profile`: Returns authenticated user profile data (name, email, role, department, avatar, createdAt, lastActive).
+* `PUT /api/v1/auth/profile`: Updates `name` and `avatar` only. Rejects or discards any attempt to tamper with `role`, `email`, or `status`.
+
+#### 2. Admin Database Settings Controller & Route
+#### [NEW] `server/src/controllers/adminSettingsController.js` & [MODIFY] `server/src/routes/adminRoutes.js`
+* `GET /api/v1/admin/settings/database`:
+  - Protected with `authenticateToken` + `requireRoles('ADMIN')`.
+  - Returns current `primaryDatabaseUrl` and `backupDatabaseUrl` (with password masked for visual security, e.g. `postgresql://user:••••••@host:port/dbname`).
+  - Returns real-time health status for both primary and secondary databases.
+* `POST /api/v1/admin/settings/database/test`:
+  - Tests a prospective connection string using a short-lived `pg.Client` test connection.
+  - Returns latency (ms) and PostgreSQL version on success, or readable error reason on failure.
+* `PUT /api/v1/admin/settings/database`:
+  - Validates and tests the new `primaryUrl` and `backupUrl`.
+  - Dynamically updates the active connection pools in `server/src/utils/prisma.js` without dropping server requests.
+  - Updates `.env` permanently on disk so changes persist across server restarts.
+  - Records an immutable `AuditLog` entry (`DATABASE_CONFIG_UPDATED`, Risk: `HIGH`).
+
+---
+
+### Frontend Components
+
+#### 3. Layout Navigation Updates
+#### [MODIFY] [AppShell.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/components/layout/AppShell.jsx)
+* **Top-Right Account Dropdown**:
+  - Add **Profile** item with `User` icon linking to `/profile`.
+  - Add **Settings** item with `Settings` icon linking to `/admin/settings` (conditionally rendered only if `user?.role === 'ADMIN'`).
+* **Bottom-Left Sidebar User Footer**:
+  - Add quick-action icons alongside Sign Out:
+    - `User` icon linking to `/profile` (tooltip: "My Profile").
+    - `Settings` icon linking to `/admin/settings` (conditionally rendered only if `user?.role === 'ADMIN'`, tooltip: "Database & Admin Settings").
+    - `LogOut` icon (tooltip: "Sign Out").
+
+#### 4. Universal Profile Page
+#### [NEW] `client/src/pages/shared/Profile.jsx`
+* Clean, humanized card layout showing:
+  - Avatar preview with upload button / predefined avatar generator.
+  - Editable Full Name field with "Save Changes" button.
+  - Read-only Corporate Email with lock badge ("Managed by Enterprise Directory").
+  - Read-only Current Role with role badge (`ADMIN`, `COURSE_CREATOR`, `MODERATOR`, `USER`). If an admin modifies the user's role elsewhere, it automatically reflects here upon refresh.
+  - Read-only Department, Location, Account Status, and Registration Date.
+  - Security summary: Password reset link and 2FA status indicator.
+
+#### 5. Admin Settings Page (Database Configuration Hub)
+#### [NEW] `client/src/pages/admin/AdminSettings.jsx`
+* Strictly protected under `/admin/settings` (Role: `ADMIN`).
+* Features:
+  - **Primary Database Configuration**:
+    - Input for `DATABASE_URL` (PostgreSQL connection string).
+    - "Test Connection" button with live ping test badge (e.g. `✓ Connected (28ms)`).
+    - Status badge: Active & Serving traffic.
+  - **Secondary / Backup Database Configuration**:
+    - Input for `BACKUP_DB_URL`.
+    - "Test Connection" button.
+    - Status badge: Active Replication or Synchronized Cluster.
+  - **Failover & Replication Mode Indicator**:
+    - Displays asynchronous dual-write replication health.
+  - **Save & Apply Changes**:
+    - Confirms changes with modal warning and applies changes seamlessly.
+
+#### 6. Route Registration
+#### [MODIFY] [AppRoutes.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/routes/AppRoutes.jsx)
+* Register `/profile` for all authenticated users.
+* Register `/admin/settings` wrapped in `<RoleRoute allowedRoles={['ADMIN']} />`.
+
+---
+
+## Verification Plan
+
+### Automated Build & Syntax Check
+- Run `npm run build` in `client/` to verify bundling and lazy-loaded routes compile with 0 errors.
+
+### Manual Functional Verification
+1. **Top-Right and Bottom-Left Navigation**:
+   - Log in as Admin: Confirm both **Profile** and **Settings** icons appear in top-right and bottom-left.
+   - Log in as Student/User: Confirm **Profile** appears in both locations, but **Settings** is completely hidden.
+2. **Profile Page (`/profile`)**:
+   - Change full name and avatar -> Verify update reflects in navbar, sidebar, and database.
+   - Verify email, role, and department fields cannot be edited.
+3. **Admin Settings Page (`/admin/settings`)**:
+   - Direct navigation as non-admin -> Verify immediate redirect/access denial.
+   - As Admin: Test a valid and invalid connection string with the "Test Connection" button.
+   - Update database settings -> Verify connection pool updates and audit log entry is recorded.
