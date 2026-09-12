@@ -5,6 +5,10 @@ import { io } from '../server.js';
 import { scanDocumentSecurity } from '../utils/documentScanner.js';
 import { extractRawTextFromBuffer, parseQuestionsFromText } from '../utils/questionExtractor.js';
 
+// Feature Flag: 1-hour cooldown on voluntary exit / failure
+// Temporarily set to false per user request for testing. Toggle to true when requested.
+export const ENABLE_ONE_HOUR_COOLDOWN = false;
+
 // ═══════════════════════════════════════════════════════════════════
 // CREATOR / ADMIN: Question Bank & Assessment Management
 // ═══════════════════════════════════════════════════════════════════
@@ -316,6 +320,40 @@ export async function getMyExams(req, res) {
         const cert = certMap[a.moduleId] || null;
         const isUnlocked = progress >= 80;
 
+        let cooldown = null;
+        if (lastSubmission && !lastSubmission.passed) {
+          let feedbackData = {};
+          try {
+            feedbackData = JSON.parse(lastSubmission.feedback || '{}');
+          } catch (e) {}
+
+          const isDisqualified = feedbackData.disqualified || (feedbackData.violationCount || 0) >= 3;
+          if (isDisqualified || ENABLE_ONE_HOUR_COOLDOWN) {
+            const cooldownMs = isDisqualified
+              ? 7 * 24 * 60 * 60 * 1000 // 7 Days (1 week)
+              : 1 * 60 * 60 * 1000;     // 1 Hour
+
+            const submittedTime = new Date(lastSubmission.submittedAt).getTime();
+            const expiresAt = new Date(submittedTime + cooldownMs);
+            const now = Date.now();
+
+            if (now < expiresAt.getTime()) {
+              const msLeft = expiresAt.getTime() - now;
+              const daysLeft = Math.floor(msLeft / (24 * 60 * 60 * 1000));
+              const hoursLeft = Math.floor((msLeft % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+              const minutesLeft = Math.ceil((msLeft % (60 * 60 * 1000)) / (60 * 1000));
+
+              cooldown = {
+                isDisqualified,
+                expiresAt: expiresAt.toISOString(),
+                formattedTime: isDisqualified
+                  ? `${daysLeft > 0 ? `${daysLeft}d ` : ''}${hoursLeft}h`
+                  : `${minutesLeft}m`,
+              };
+            }
+          }
+        }
+
         return {
           id: a.id,
           moduleId: a.moduleId,
@@ -331,6 +369,7 @@ export async function getMyExams(req, res) {
           isUnlocked,
           courseProgress: progress,
           certificate: cert,
+          cooldown,
           lastSubmission: lastSubmission
             ? {
                 id: lastSubmission.id,
@@ -350,7 +389,7 @@ export async function getMyExams(req, res) {
 
 /**
  * GET /api/v1/assessments/:id/start
- * Launch proctored exam session: randomly samples questions and strips correct answers (Anti-Cheat)
+ * Launch proctored exam session: enforces cooldowns, draws different questions from prior attempt, and strips answers
  */
 export async function startExam(req, res) {
   try {
@@ -380,12 +419,80 @@ export async function startExam(req, res) {
       });
     }
 
+    // ── Enforce 1-Hour and 7-Day Cooldowns on Re-attempts ──
+    const lastAttempt = await prisma.assessmentSubmission.findFirst({
+      where: { assessmentId: assessment.id, userId },
+      orderBy: { submittedAt: 'desc' },
+    });
+
+    if (lastAttempt && !lastAttempt.passed) {
+      let feedbackData = {};
+      try {
+        feedbackData = JSON.parse(lastAttempt.feedback || '{}');
+      } catch (e) {}
+
+      const isDisqualified = feedbackData.disqualified || (feedbackData.violationCount || 0) >= 3;
+      if (isDisqualified || ENABLE_ONE_HOUR_COOLDOWN) {
+        const cooldownMs = isDisqualified
+          ? 7 * 24 * 60 * 60 * 1000 // 7 Days for 3 violations
+          : 1 * 60 * 60 * 1000;     // 1 Hour for voluntary exit / standard attempt
+
+        const submittedTime = new Date(lastAttempt.submittedAt).getTime();
+        const expiresAt = new Date(submittedTime + cooldownMs);
+        const now = Date.now();
+
+        if (now < expiresAt.getTime()) {
+          const msLeft = expiresAt.getTime() - now;
+          const daysLeft = Math.floor(msLeft / (24 * 60 * 60 * 1000));
+          const hoursLeft = Math.floor((msLeft % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+          const minutesLeft = Math.ceil((msLeft % (60 * 60 * 1000)) / (60 * 1000));
+
+          const timeMsg = isDisqualified
+            ? `${daysLeft > 0 ? `${daysLeft} days and ` : ''}${hoursLeft} hours`
+            : `${minutesLeft} minutes`;
+
+          return res.status(403).json({
+            success: false,
+            error: isDisqualified ? 'DISQUALIFIED_COOLDOWN' : 'COOLDOWN_ACTIVE',
+            isDisqualified,
+            cooldownExpiresAt: expiresAt.toISOString(),
+            message: isDisqualified
+              ? `You were eliminated for 3 security violations. You cannot retake this exam for 7 days (available in ${timeMsg}).`
+              : `You exited this exam recently. You cannot retake it for 1 hour (available in ${timeMsg}).`,
+          });
+        }
+      }
+    }
+
+    // ── Question Sampling with Rotation (Different questions on re-entry) ──
     const allQuestions = JSON.parse(assessment.questions || '[]');
-    let sampled = [...allQuestions];
+    let previousQuestionIds = new Set();
+    if (lastAttempt) {
+      try {
+        const prevAnswers = JSON.parse(lastAttempt.answers || '{}');
+        if (prevAnswers && typeof prevAnswers === 'object') {
+          if (Array.isArray(prevAnswers.questionIds)) {
+            prevAnswers.questionIds.forEach((qid) => previousQuestionIds.add(qid));
+          } else {
+            Object.keys(prevAnswers).forEach((qid) => previousQuestionIds.add(qid));
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Separate unseen vs seen questions from previous attempt
+    const unseenQuestions = allQuestions.filter((q) => !previousQuestionIds.has(q.id));
+    const seenQuestions = allQuestions.filter((q) => previousQuestionIds.has(q.id));
+
+    // Shuffle both pools
+    const shuffledUnseen = [...unseenQuestions].sort(() => Math.random() - 0.5);
+    const shuffledSeen = [...seenQuestions].sort(() => Math.random() - 0.5);
+
+    // Prioritize unseen questions first so candidate gets different questions
+    let sampled = [...shuffledUnseen, ...shuffledSeen].slice(0, assessment.sampleSize);
     if (assessment.randomizeQuestions) {
       sampled = sampled.sort(() => Math.random() - 0.5);
     }
-    sampled = sampled.slice(0, assessment.sampleSize);
 
     // Sanitize: Strip correctAnswer and explanation for student anti-cheat protection
     const sanitizedQuestions = sampled.map((q) => ({
@@ -476,8 +583,9 @@ export async function submitExam(req, res) {
       });
     }
 
-    const score = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
-    const passed = score >= assessment.passingScore;
+    const isDisqualified = req.body.disqualified === true || (violations && violations.length >= 3);
+    const score = isDisqualified ? 0 : (totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0);
+    const passed = isDisqualified ? false : (score >= assessment.passingScore);
     const violationList = violations || [];
     const violationCount = violationList.length;
 
@@ -488,6 +596,8 @@ export async function submitExam(req, res) {
       totalPoints,
       violationCount,
       violations: violationList,
+      disqualified: isDisqualified,
+      reason: isDisqualified ? 'VIOLATION_LIMIT_EXCEEDED' : null,
       gradedAnswers,
     });
 
@@ -567,16 +677,17 @@ export async function submitExam(req, res) {
       }
     }
 
-    // Log security audit entry for high violation count
-    if (violationCount > 3) {
+    // Log security audit entry for disqualification or high violation count
+    if (isDisqualified || violationCount >= 3) {
       await prisma.auditLog.create({
         data: {
           actorId: userId,
           actorEmail: req.user.email,
           actorName: req.user.name,
-          action: 'EXAM_PROCTOR_VIOLATION',
+          action: 'EXAM_DISQUALIFIED',
           resource: `Assessment: ${assessment.title}`,
-          details: `Candidate triggered ${violationCount} proctoring violations during exam. Score: ${score}%`,
+          details: `Candidate eliminated after 3 security violations. 7-day retake ban applied.`,
+          ipAddress: req.ip || req.headers['x-forwarded-for'] || '127.0.0.1',
           riskLevel: 'HIGH',
         },
       });
@@ -586,16 +697,16 @@ export async function submitExam(req, res) {
         await prisma.notification.create({
           data: {
             targetRole: 'ADMIN',
-            title: '🚨 Exam Integrity Alert',
-            message: `${req.user.name} triggered ${violationCount} focus-loss / anti-cheat violations during ${assessment.title}.`,
+            title: '🚨 Candidate Disqualified',
+            message: `${req.user.name} eliminated from ${assessment.title} after 3 security violations. 7-day retake lockout applied.`,
             type: 'SECURITY_ALERT',
             link: '/admin/audit',
           },
         });
         if (io) {
           io.to('role_ADMIN').emit('system_notification', {
-            title: '🚨 Exam Integrity Alert',
-            message: `${req.user.name} triggered ${violationCount} anti-cheat violations during ${assessment.title}.`,
+            title: '🚨 Candidate Disqualified',
+            message: `${req.user.name} eliminated from ${assessment.title} (3 violations).`,
             type: 'SECURITY_ALERT',
             link: '/admin/audit',
           });
@@ -605,11 +716,16 @@ export async function submitExam(req, res) {
       }
     }
 
-    logger.info(`Exam submitted: assessment=${id} user=${userId} score=${score}% passed=${passed} violations=${violationCount}`);
+    logger.info(`Exam submitted: assessment=${id} user=${userId} score=${score}% passed=${passed} violations=${violationCount} disqualified=${isDisqualified}`);
 
     return res.status(200).json({
       success: true,
-      message: passed ? 'Assessment Passed! Cryptographic Certificate Generated.' : 'Assessment Completed. Passing score was not met.',
+      isDisqualified,
+      message: isDisqualified
+        ? 'Exam terminated due to 3 security violations. You cannot retake this exam for 7 days.'
+        : passed
+        ? 'Assessment Passed! Cryptographic Certificate Generated.'
+        : 'Assessment Completed. Passing score was not met.',
       result: {
         submissionId: submission.id,
         score,
@@ -618,6 +734,7 @@ export async function submitExam(req, res) {
         earnedPoints,
         totalPoints,
         violationCount,
+        disqualified: isDisqualified,
         gradedAnswers,
       },
       certificate: certificate
@@ -635,6 +752,73 @@ export async function submitExam(req, res) {
   } catch (error) {
     logger.error(`Submit Exam Error: ${error.message}`);
     return res.status(500).json({ success: false, error: 'SUBMIT_FAILED', message: error.message });
+  }
+}
+
+/**
+ * POST /api/v1/assessments/:id/exit
+ * Candidate voluntarily exits the exam (applies 1-hour retake cooldown)
+ */
+export async function exitExam(req, res) {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const { questionIds, answers } = req.body || {};
+
+    const assessment = await prisma.assessment.findUnique({
+      where: { id },
+      include: { module: { select: { title: true, code: true } } },
+    });
+    if (!assessment) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Assessment not found.' });
+    }
+
+    const feedback = JSON.stringify({
+      abandoned: true,
+      reason: 'EXAM_ABANDONED',
+      score: 0,
+      passed: false,
+      message: 'Candidate voluntarily exited the exam session.',
+    });
+
+    const storedAnswers = JSON.stringify({
+      ...(answers || {}),
+      questionIds: questionIds || [],
+    });
+
+    await prisma.assessmentSubmission.create({
+      data: {
+        assessmentId: id,
+        userId,
+        answers: storedAnswers,
+        score: 0,
+        passed: false,
+        feedback,
+      },
+    });
+
+    // Create Audit Log
+    await prisma.auditLog.create({
+      data: {
+        actorId: userId,
+        actorEmail: req.user.email,
+        actorName: req.user.name,
+        action: 'EXAM_ABANDONED',
+        resource: `Assessment: ${assessment.title}`,
+        details: 'Candidate voluntarily exited the exam session. 1-hour retake cooldown applied.',
+        ipAddress: req.ip || req.headers['x-forwarded-for'] || '127.0.0.1',
+        riskLevel: 'LOW',
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'You have exited the exam. A 1-hour cooldown has been applied.',
+      cooldownExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+  } catch (error) {
+    logger.error(`Exit Exam Error: ${error.message}`);
+    return res.status(500).json({ success: false, error: 'EXIT_FAILED', message: error.message });
   }
 }
 

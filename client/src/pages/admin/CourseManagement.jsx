@@ -214,17 +214,17 @@ export default function CourseManagement() {
                 className="bg-card border border-app rounded-card p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-6 shadow-sm hover:border-brand-500/20 transition-all"
               >
                 <div className="space-y-2 flex-1">
-                  {/* Humanized Tagline: Code • Status • Live Expiration */}
-                  <div className="flex flex-wrap items-center gap-2.5">
+                  {/* Humanized Tagline: Code | Status | Live Expiration */}
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className="font-mono text-xs font-bold text-brand-600 dark:text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded">
                       {c.code}
                     </span>
-                    <span className="text-app-muted text-xs">•</span>
+                    <span className="meta-divider" />
                     <StatusBadge status={c.status} size="xs" />
 
                     {expiryInfo && (
                       <>
-                        <span className="text-app-muted text-xs">•</span>
+                        <span className="meta-divider" />
                         <span className={`flex items-center gap-1.5 text-xs ${expiryInfo.statusColor}`}>
                           {expiryInfo.icon}
                           <span>{expiryInfo.text}</span>
@@ -235,8 +235,10 @@ export default function CourseManagement() {
 
                   <div>
                     <h3 className="text-base font-bold text-app">{c.title}</h3>
-                    <p className="text-xs text-app-secondary mt-0.5">
-                      {c.department} • Instructor: <span className="font-medium text-app">{c.instructorName || 'Faculty'}</span>
+                    <p className="text-xs text-app-secondary mt-0.5 flex items-center flex-wrap">
+                      <span>{c.department}</span>
+                      <span className="meta-divider" />
+                      <span>Instructor: <span className="font-medium text-app">{c.instructorName || 'Faculty'}</span></span>
                     </p>
                   </div>
 

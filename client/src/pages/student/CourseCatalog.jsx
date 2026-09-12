@@ -8,6 +8,7 @@ import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
+import { SegmentedToggle } from '../../components/ui/SegmentedToggle.jsx';
 import {
   BookOpen, Clock, User, Star, Search, Filter,
   ArrowRight, Sparkles, ShieldCheck, CheckCircle2, Play, RefreshCw, Send
@@ -171,27 +172,18 @@ export default function CourseCatalog() {
 
       {/* Sleek Minimal Segmented Track Filter & Search */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center p-1 rounded-btn bg-elevated/80 border border-app gap-1 overflow-x-auto w-full sm:w-auto scrollbar-none text-xs">
-          {[
+        <SegmentedToggle
+          options={[
             { id: 'ALL', label: 'All Tracks' },
             { id: 'ENGINEERING', label: 'Engineering' },
             { id: 'SECURITY', label: 'Security' },
             { id: 'DATA SCIENCE', label: 'Data Science' },
-          ].map((dept) => (
-            <button
-              key={dept.id}
-              type="button"
-              onClick={() => setSelectedDept(dept.id)}
-              className={`px-3 py-1.5 rounded-md font-semibold whitespace-nowrap transition-all ${
-                selectedDept === dept.id
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'text-app-secondary hover:text-app'
-              }`}
-            >
-              {dept.label}
-            </button>
-          ))}
-        </div>
+          ]}
+          value={selectedDept}
+          onChange={setSelectedDept}
+          size="sm"
+          color="blue"
+        />
 
         <div className="relative w-full sm:w-64">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-app-muted pointer-events-none" />
@@ -323,9 +315,9 @@ export default function CourseCatalog() {
                 <span className="text-xs font-semibold text-app">{modalCourse.title}</span>
               </div>
               <p className="text-xs text-app-secondary">{modalCourse.description}</p>
-              <div className="flex items-center gap-4 text-[11px] text-app-muted pt-1 border-t border-app/60">
+              <div className="flex items-center gap-1.5 text-[11px] text-app-muted pt-1 border-t border-app/60">
                 <span>Duration: {modalCourse.duration}</span>
-                <span>·</span>
+                <span className="meta-divider" />
                 <span>Track: {modalCourse.department}</span>
               </div>
             </div>

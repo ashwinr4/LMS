@@ -294,15 +294,21 @@ export default function CreatorDashboard() {
                     <span className="font-mono text-xs font-bold text-white bg-blue-600 px-2.5 py-0.5 rounded shadow-xs">
                       {course.code}
                     </span>
+                    <span className="meta-divider" />
                     <StatusBadge status={course.status} size="xs" />
-                    <span className="text-xs text-slate-500 dark:text-slate-400">• {course.department}</span>
+                    {course.department && (
+                      <>
+                        <span className="meta-divider" />
+                        <span className="text-xs text-slate-500 dark:text-slate-400">{course.department}</span>
+                      </>
+                    )}
                   </div>
                   <h4 className="font-bold text-sm text-slate-900 dark:text-white truncate">{course.title}</h4>
-                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 flex items-center gap-2">
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 flex items-center">
                     <span>{course.duration || 'Flexible duration'}</span>
-                    <span>•</span>
+                    <span className="meta-divider" />
                     <span>{course.level || 'Intermediate'}</span>
-                    <span>•</span>
+                    <span className="meta-divider" />
                     <span>{course.enrolledCount || 0} Students Enrolled</span>
                   </p>
                 </div>

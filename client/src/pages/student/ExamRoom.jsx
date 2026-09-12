@@ -42,6 +42,9 @@ export default function ExamRoom() {
   const [violations, setViolations] = useState([]);
   const [showViolationBanner, setShowViolationBanner] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isDisqualified, setIsDisqualified] = useState(false);
+  const [showExitModal, setShowExitModal] = useState(false);
+  const [isExiting, setIsExiting] = useState(false);
 
   // Result State
   const [submissionResult, setSubmissionResult] = useState(null);
@@ -49,6 +52,41 @@ export default function ExamRoom() {
   const [showConfirmSubmitModal, setShowConfirmSubmitModal] = useState(false);
 
   const timerRef = useRef(null);
+  const lastViolationRef = useRef(0);
+
+  const handleExitExam = async () => {
+    setIsExiting(true);
+    try {
+      await api.post(`/assessments/${examId}/exit`, {
+        questionIds: session?.questionIds || [],
+        answers,
+      });
+    } catch (err) {
+      console.error('Failed to record exit:', err);
+    } finally {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+      setIsExiting(false);
+      setShowExitModal(false);
+      navigate('/assessments');
+    }
+  };
+
+  const handleDisqualification = async (currentViolations) => {
+    setIsDisqualified(true);
+    if (timerRef.current) clearInterval(timerRef.current);
+    try {
+      await api.post(`/assessments/${examId}/submit`, {
+        answers,
+        questionIds: session?.questionIds || [],
+        violations: currentViolations,
+        disqualified: true,
+      });
+    } catch (err) {
+      console.error('Failed to record disqualification:', err);
+    }
+  };
 
   // 1. Initialize Exam Session
   useEffect(() => {
@@ -76,7 +114,7 @@ export default function ExamRoom() {
     }
   };
 
-  // 2. Fullscreen & Anti-Cheat Blur Monitoring
+  // 2. Fullscreen & Anti-Cheat Blur & Minimization Monitoring
   const enterFullscreen = () => {
     try {
       if (!document.fullscreenElement) {
@@ -94,13 +132,31 @@ export default function ExamRoom() {
       const isFull = !!document.fullscreenElement;
       setIsFullscreen(isFull);
       if (!isFull && session && !submissionResult) {
-        logViolation('FULLSCREEN_EXIT', 'Candidate exited full-screen proctored view.');
+        const now = Date.now();
+        if (now - lastViolationRef.current > 1500) {
+          lastViolationRef.current = now;
+          logViolation('FULLSCREEN_EXIT', 'Candidate minimized window or exited full-screen proctored view.');
+        }
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && session && !submissionResult) {
+        const now = Date.now();
+        if (now - lastViolationRef.current > 1500) {
+          lastViolationRef.current = now;
+          logViolation('WINDOW_MINIMIZED', 'Candidate minimized the browser window or switched application focus.');
+        }
       }
     };
 
     const handleWindowBlur = () => {
       if (session && !submissionResult) {
-        logViolation('TAB_SWITCH', 'Candidate switched tabs or focus away from exam.');
+        const now = Date.now();
+        if (now - lastViolationRef.current > 1500) {
+          lastViolationRef.current = now;
+          logViolation('WINDOW_MINIMIZED', 'Candidate minimized or switched focus away from the exam window.');
+        }
       }
     };
 
@@ -116,12 +172,14 @@ export default function ExamRoom() {
     };
 
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
     document.addEventListener('contextmenu', handleContextMenu);
     document.addEventListener('copy', handleCopy);
 
     return () => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('copy', handleCopy);
@@ -129,8 +187,12 @@ export default function ExamRoom() {
   }, [session, submissionResult]);
 
   const logViolation = (type, message) => {
+    if (isDisqualified) return;
     setViolations((prev) => {
       const updated = [...prev, { type, message, timestamp: new Date().toISOString() }];
+      if (updated.length >= 3) {
+        handleDisqualification(updated);
+      }
       return updated;
     });
     setShowViolationBanner(true);
@@ -250,13 +312,23 @@ export default function ExamRoom() {
       {/* Top Security & Proctoring HUD */}
       <header className="bg-card border-b border-app px-6 py-3 sticky top-0 z-30 flex flex-wrap items-center justify-between gap-4 shadow-sm">
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowExitModal(true)}
+            title="Exit Exam"
+            className="p-1.5 -ml-1 rounded-btn text-app-secondary hover:text-red-500 hover:bg-red-500/10 transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
           <span className="font-mono text-xs font-bold text-brand-600 dark:text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded border border-brand-500/20">
             {session.moduleCode}
           </span>
           <div>
             <h1 className="text-sm font-bold truncate max-w-md">{session.title}</h1>
-            <p className="text-[11px] text-app-secondary">
-              Question {currentIdx + 1} of {questions.length} • {answeredCount} Answered
+            <p className="text-[11px] text-app-secondary flex items-center">
+              <span>Question {currentIdx + 1} of {questions.length}</span>
+              <span className="meta-divider" />
+              <span>{answeredCount} Answered</span>
             </p>
           </div>
         </div>
@@ -278,24 +350,19 @@ export default function ExamRoom() {
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-btn text-xs font-semibold ${
               violations.length === 0
                 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                : violations.length >= 2
+                ? 'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20'
                 : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
             }`}
           >
             <ShieldCheck className="h-3.5 w-3.5" />
-            <span>{violations.length} Violations</span>
+            <span>{violations.length} {violations.length === 1 ? 'Violation' : 'Violations'}</span>
           </div>
 
-          {!isFullscreen && (
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={enterFullscreen}
-              leftIcon={<Maximize className="h-3 w-3" />}
-              className="text-[11px]"
-            >
-              Full Screen
-            </Button>
-          )}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-btn text-xs font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+            <Maximize className="h-3 w-3" />
+            <span>Fullscreen Locked</span>
+          </div>
         </div>
 
         {/* HUD Right: Submit Action */}
@@ -311,12 +378,12 @@ export default function ExamRoom() {
       </header>
 
       {/* Proctoring Warning Banner */}
-      {showViolationBanner && (
+      {showViolationBanner && !isDisqualified && (
         <div className="bg-red-600 text-white px-4 py-2 text-xs font-semibold flex items-center justify-between shadow-md transition-all animate-bounce">
           <div className="flex items-center gap-2">
             <ShieldAlert className="h-4 w-4" />
             <span>
-              <strong>Security Alert:</strong> Focus loss or tab change detected. All actions are logged to your permanent audit record.
+              <strong>Security Alert:</strong> Window minimized or focus lost ({violations.length} {violations.length === 1 ? 'violation' : 'violations'} logged). Continued infractions will result in immediate disqualification.
             </span>
           </div>
           <button onClick={() => setShowViolationBanner(false)} className="text-white/80 hover:text-white text-xs">
@@ -325,8 +392,98 @@ export default function ExamRoom() {
         </div>
       )}
 
+      {/* Mandatory Fullscreen & Anti-Minimization Lockout Overlay */}
+      {session && !submissionResult && !isFullscreen && !isDisqualified && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 select-none">
+          <div className="bg-card border border-red-500/30 dark:border-red-500/40 rounded-card p-8 max-w-md w-full text-center shadow-2xl space-y-5 animate-in fade-in zoom-in duration-200">
+            <div className="w-16 h-16 rounded-full bg-red-500/10 border-2 border-red-500/30 flex items-center justify-center mx-auto text-red-500 dark:text-red-400">
+              <ShieldAlert className="h-8 w-8 animate-pulse" />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xl font-black text-app tracking-tight">
+                {violations.length > 0 ? 'Exam Suspended: Window Minimized' : 'Mandatory Fullscreen Mode'}
+              </h3>
+              <p className="text-xs text-app-secondary leading-relaxed">
+                {violations.length > 0
+                  ? 'You minimized the exam window, switched applications, or exited fullscreen mode. Minimizing the browser or switching away is strictly prohibited. This incident has been logged in your audit record.'
+                  : 'To maintain proctoring integrity, this examination requires mandatory fullscreen mode. Minimizing the window, exiting fullscreen, or switching tabs is strictly forbidden.'}
+              </p>
+            </div>
+
+            {violations.length > 0 && (
+              <div className="p-3 bg-red-500/10 rounded-btn border border-red-500/20 text-xs font-semibold text-red-600 dark:text-red-400 flex items-center justify-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>Recorded Violations: {violations.length}</span>
+              </div>
+            )}
+
+            <Button
+              variant="primary"
+              size="lg"
+              className="w-full justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-md"
+              onClick={enterFullscreen}
+              leftIcon={<Maximize className="h-4 w-4" />}
+            >
+              {violations.length > 0 ? 'Return to Fullscreen & Resume Exam' : 'Enter Fullscreen & Begin Exam'}
+            </Button>
+
+            <button
+              type="button"
+              onClick={() => setShowExitModal(true)}
+              className="text-xs text-red-500 hover:text-red-600 hover:underline font-semibold block mx-auto pt-1 transition-colors"
+            >
+              Exit & Abandon Exam
+            </button>
+
+            <p className="text-[11px] text-app-muted">
+              Minimizing, exiting fullscreen, or losing window focus records automated security infractions.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 3-Violations Disqualification Overlay */}
+      {isDisqualified && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4 select-none">
+          <div className="bg-card border border-red-500/40 rounded-card p-8 max-w-md w-full text-center shadow-2xl space-y-5 animate-in fade-in zoom-in duration-200">
+            <div className="w-16 h-16 rounded-full bg-red-500/10 border-2 border-red-500/30 flex items-center justify-center mx-auto text-red-500">
+              <ShieldAlert className="h-8 w-8" />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-app">Exam Terminated: 3 Violations</h3>
+              <p className="text-xs text-app-secondary leading-relaxed">
+                You have been eliminated for exceeding the limit of 3 security violations. You cannot retake this exam for 7 days.
+              </p>
+            </div>
+
+            <div className="p-3 bg-red-500/10 rounded-btn border border-red-500/20 text-xs font-semibold text-red-600 dark:text-red-400 flex items-center justify-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>Recorded Violations: 3 / 3</span>
+            </div>
+
+            <Button
+              variant="primary"
+              size="lg"
+              className="w-full justify-center bg-red-600 hover:bg-red-700 text-white font-semibold text-sm shadow-md"
+              onClick={() => {
+                if (document.fullscreenElement) {
+                  document.exitFullscreen().catch(() => {});
+                }
+                navigate('/assessments');
+              }}
+            >
+              Back to Assessments
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Main Exam Room Body */}
-      <div className="flex-1 max-w-5xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-8">
+      <div className={`flex-1 max-w-5xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-8 transition-all ${
+        (!isFullscreen || isDisqualified) && session && !submissionResult ? 'filter blur-sm pointer-events-none select-none' : ''
+      }`}>
         {/* Left 3 cols: Question Area */}
         <div className="lg:col-span-3 space-y-6">
           {currentQ && (
@@ -477,6 +634,43 @@ export default function ExamRoom() {
           </div>
         </div>
       </div>
+
+      {/* Exit Exam Confirmation Modal */}
+      <Modal
+        isOpen={showExitModal}
+        onClose={() => setShowExitModal(false)}
+        title="Exit Exam?"
+      >
+        <div className="space-y-4 text-sm">
+          <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-btn text-xs text-amber-700 dark:text-amber-300 space-y-1.5">
+            <p className="font-bold flex items-center gap-1.5 text-amber-800 dark:text-amber-200">
+              <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span>Exit Confirmation</span>
+            </p>
+            <p className="leading-relaxed">
+              If you exit now, your current attempt will end. When you return, you will receive a different set of questions.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-app">
+            <Button
+              variant="secondary"
+              onClick={() => setShowExitModal(false)}
+              disabled={isExiting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleExitExam}
+              disabled={isExiting}
+              leftIcon={<ArrowLeft className="h-4 w-4" />}
+            >
+              {isExiting ? 'Exiting...' : 'Exit Exam'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Confirmation Modal */}
       <Modal

@@ -64,6 +64,47 @@
     @apply border-slate-400 dark:border-dark-border-strong;
   }
 
+  /* Inset row divider with gaps at both ends and soft theme-adaptive colors */
+  .table-row-inset-divider {
+    position: relative;
+    background-image: linear-gradient(to right, transparent 20px, #e2e8f0 20px, #e2e8f0 calc(100% - 20px), transparent calc(100% - 20px));
+    background-position: bottom;
+    background-size: 100% 1px;
+    background-repeat: no-repeat;
+  }
+  .table-row-inset-divider:last-child {
+    background-image: none !important;
+  }
+  .dark .table-row-inset-divider {
+    background-image: linear-gradient(to right, transparent 20px, rgba(255, 255, 255, 0.08) 20px, rgba(255, 255, 255, 0.08) calc(100% - 20px), transparent calc(100% - 20px));
+  }
+  .dark .table-row-inset-divider:last-child {
+    background-image: none !important;
+  }
+
+  /* Safe divide-app fallback to prevent white borders across any platform table */
+  .divide-app > :not([hidden]) ~ :not([hidden]) {
+    border-color: #e2e8f0;
+  }
+  .dark .divide-app > :not([hidden]) ~ :not([hidden]) {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  /* Universal vertical gray hairline divider for course cards and metadata rows */
+  .meta-divider {
+    height: 12px;
+    width: 1px;
+    background-color: #cbd5e1;
+    display: inline-block;
+    vertical-align: middle;
+    align-self: center;
+    margin: 0 6px;
+    flex-shrink: 0;
+  }
+  .dark .meta-divider {
+    background-color: rgba(255, 255, 255, 0.18);
+  }
+
   /* Sidebar utility aliases */
   .bg-sidebar {
     background-color: #172A46;
@@ -90,7 +131,7 @@
     box-shadow: 0 12px 32px rgba(0,0,0,0.12), 0 4px 8px rgba(0,0,0,0.06);
   }
 
-  /* Custom thin scrollbar */
+  /* Universal Theme-Aware Scrollbar Styles */
   .scrollbar-thin::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -99,11 +140,97 @@
     background: transparent;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply bg-slate-300 dark:bg-dark-border rounded-full;
+    @apply bg-slate-300 dark:bg-slate-700 rounded-full;
   }
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-400 dark:bg-dark-border-strong;
+    @apply bg-slate-400 dark:bg-slate-600;
   }
+}
+
+/* Universal Theme-Aware Scrollbars for all elements & native controls */
+html.dark {
+  color-scheme: dark;
+}
+
+html:not(.dark) {
+  color-scheme: light;
+}
+
+/* ══════════════════════════════════════════════════════════════ */
+/* PLATFORM-WIDE HOVER/SCROLL DYNAMIC SCROLLBARS                  */
+/* ══════════════════════════════════════════════════════════════ */
+
+/* Idle state: hide scrollbar across all containers platform-wide */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+  display: none;
+}
+
+/* Hover or focused state: reveal sleek, themed scrollbar */
+*:hover,
+*:focus-within {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 transparent;
+}
+
+.dark *:hover,
+.dark *:focus-within {
+  scrollbar-color: #334155 transparent;
+}
+
+*:hover::-webkit-scrollbar,
+*:focus-within::-webkit-scrollbar {
+  display: block;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 9999px;
+  border: 1.5px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+  background-clip: content-box;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background-color: #334155;
+  border-radius: 9999px;
+  border: 1.5px solid transparent;
+  background-clip: content-box;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: #475569;
+  background-clip: content-box;
+}
+
+/* Force hide scrollbars utility */
+.scrollbar-none,
+.scrollbar-none:hover,
+.scrollbar-none:focus-within {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.scrollbar-none::-webkit-scrollbar,
+.scrollbar-none:hover::-webkit-scrollbar,
+.scrollbar-none:focus-within::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
 }
 
 /* ══════════════════════════════════════════════════════════════ */
@@ -181,4 +308,20 @@ button:hover .animate-icon-bell {
 .theme-transition,
 .theme-transition * {
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.15s ease;
+}
+
+@keyframes slideDownMenu {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-slide-down {
+  animation: slideDownMenu 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: top;
 }

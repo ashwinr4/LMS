@@ -2,10 +2,14 @@ import express from 'express';
 import multer from 'multer';
 import {
   listUsers,
+  getUserDetail,
+  updateUserDetail,
   createUser,
   updateUserStatus,
   updateUserRole,
   resetUserPassword,
+  updateModeratorPermissions,
+  getModeratorPermissionHistory,
   bulkImportUsers,
   listAllCourses,
   updateCourseStatus,
@@ -30,9 +34,13 @@ router.get('/badge-counts', getAdminBadgeCounts);
 // ── User Management ──
 router.get('/users', listUsers);
 router.post('/users', createUser);
+router.get('/users/:id', getUserDetail);
+router.put('/users/:id', updateUserDetail);
 router.patch('/users/:id/status', updateUserStatus);
 router.patch('/users/:id/role', updateUserRole);
 router.post('/users/:id/reset-password', resetUserPassword);
+router.put('/users/:id/moderator-permissions', updateModeratorPermissions);
+router.get('/users/:id/moderator-permissions/history', getModeratorPermissionHistory);
 router.post('/users/bulk-import', upload.single('file'), bulkImportUsers);
 
 // ── Course Lifecycle & Expiration ──

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { NavLink, Link, useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useTheme } from '../../context/ThemeContext.jsx';
@@ -35,6 +35,7 @@ import {
   User,
   Settings,
 } from 'lucide-react';
+import { MustChangePasswordModal } from '../auth/MustChangePasswordModal.jsx';
 
 export function AppShell() {
   const { user, logout } = useAuth();
@@ -56,24 +57,31 @@ export function AppShell() {
   const userRole = user?.role || 'USER';
   const unreadNotificationsCount = notifications.filter((n) => !n.isRead).length;
 
+  const fetchBadgeCounts = useCallback(async () => {
+    try {
+      if (userRole === 'ADMIN') {
+        const badgeRes = await api.get('/admin/badge-counts').catch(() => ({ data: { counts: {} } }));
+        if (badgeRes.data?.counts) {
+          setPendingRequestsCount(badgeRes.data.counts.pendingApprovals || 0);
+          setPasswordResetRequestsCount(badgeRes.data.counts.passwordResetRequests || 0);
+        }
+      } else if (userRole === 'COURSE_CREATOR') {
+        const creatorRes = await api.get('/enrollments/creator-queue-count').catch(() => ({ data: { count: 0 } }));
+        if (creatorRes.data) {
+          setPendingRequestsCount(creatorRes.data.count || 0);
+        }
+      }
+    } catch {
+      // silent fail
+    }
+  }, [userRole]);
+
   // Initial fetch for badges, unread message badges, and system notifications
   useEffect(() => {
     let mounted = true;
     async function fetchInitialData() {
       try {
-        // 1. Role-specific queue counts via fast SQL COUNT queries
-        if (userRole === 'ADMIN') {
-          const badgeRes = await api.get('/admin/badge-counts').catch(() => ({ data: { counts: {} } }));
-          if (mounted && badgeRes.data?.counts) {
-            setPendingRequestsCount(badgeRes.data.counts.pendingApprovals || 0);
-            setPasswordResetRequestsCount(badgeRes.data.counts.passwordResetRequests || 0);
-          }
-        } else if (userRole === 'COURSE_CREATOR') {
-          const creatorRes = await api.get('/enrollments/creator-queue-count').catch(() => ({ data: { count: 0 } }));
-          if (mounted && creatorRes.data) {
-            setPendingRequestsCount(creatorRes.data.count || 0);
-          }
-        }
+        await fetchBadgeCounts();
 
         // 2. Unread direct messages & announcements for Mail icon
         if (location.pathname === '/inbox') {
@@ -97,7 +105,14 @@ export function AppShell() {
     }
     fetchInitialData();
     return () => { mounted = false; };
-  }, [userRole]);
+  }, [userRole, fetchBadgeCounts]);
+
+  // Sync badge counts whenever user navigates to approval/review routes
+  useEffect(() => {
+    if (location.pathname.startsWith('/admin/approvals') || location.pathname.startsWith('/creator/requests')) {
+      fetchBadgeCounts();
+    }
+  }, [location.pathname, fetchBadgeCounts]);
 
   // Handle route change for /inbox specifically
   useEffect(() => {
@@ -125,6 +140,7 @@ export function AppShell() {
         },
         ...prev,
       ]);
+      fetchBadgeCounts();
     };
 
     // 2. Course Creator queue increment
@@ -139,6 +155,11 @@ export function AppShell() {
       if (userRole === 'ADMIN') {
         setPendingRequestsCount((prev) => prev + 1);
       }
+    };
+
+    // Queue decrement handlers (real-time badge synchronization across panels)
+    const handleQueueDecrement = () => {
+      fetchBadgeCounts();
     };
 
     // 4. Admin password reset request increment
@@ -176,6 +197,9 @@ export function AppShell() {
     socket.on('system_notification', handleSystemNotification);
     socket.on('creator_new_request', handleCreatorNew);
     socket.on('admin_new_request', handleAdminNew);
+    socket.on('queue_decrement', handleQueueDecrement);
+    socket.on('admin_request_resolved', handleQueueDecrement);
+    socket.on('creator_request_resolved', handleQueueDecrement);
     socket.on('password_reset_requested', handlePasswordResetReq);
     socket.on('password_reset_completed', handlePasswordResetDone);
     socket.on('user_role_updated', handleRoleUpdated);
@@ -186,13 +210,44 @@ export function AppShell() {
       socket.off('system_notification', handleSystemNotification);
       socket.off('creator_new_request', handleCreatorNew);
       socket.off('admin_new_request', handleAdminNew);
+      socket.off('queue_decrement', handleQueueDecrement);
+      socket.off('admin_request_resolved', handleQueueDecrement);
+      socket.off('creator_request_resolved', handleQueueDecrement);
       socket.off('password_reset_requested', handlePasswordResetReq);
       socket.off('password_reset_completed', handlePasswordResetDone);
       socket.off('user_role_updated', handleRoleUpdated);
       socket.off('new_announcement', handleNewAnnouncement);
       socket.off('new_direct_message', handleNewDirect);
     };
-  }, [socket, userRole, location.pathname]);
+  }, [socket, userRole, location.pathname, fetchBadgeCounts]);
+
+  // Moderator permissions parser for dynamic permission-aware navigation
+  const moderatorPerms = (() => {
+    if (!user?.moderatorPermissions) return {};
+    try {
+      return typeof user.moderatorPermissions === 'string'
+        ? JSON.parse(user.moderatorPermissions)
+        : user.moderatorPermissions;
+    } catch {
+      return {};
+    }
+  })();
+
+  const moderatorNavItems = [
+    { label: 'Moderator Overview', path: '/moderator', icon: <LayoutDashboard className="h-4 w-4" />, exact: true },
+    ...(userRole === 'ADMIN' || moderatorPerms.users?.view
+      ? [{ label: 'User Directory', path: '/moderator/users', icon: <Users className="h-4 w-4" /> }]
+      : []),
+    ...(userRole === 'ADMIN' || moderatorPerms.courses?.view
+      ? [{ label: 'Course Quality Review', path: '/moderator/courses', icon: <BookOpen className="h-4 w-4" /> }]
+      : []),
+    ...(userRole === 'ADMIN' || moderatorPerms.transfers?.view
+      ? [{ label: 'Transfer Requests', path: '/moderator/transfers', icon: <CheckSquare className="h-4 w-4" /> }]
+      : []),
+    ...(userRole === 'ADMIN' || moderatorPerms.messages?.view !== false
+      ? [{ label: 'Inbox & Messages', path: '/inbox', icon: <Mail className="h-4 w-4" />, badge: unreadMessagesCount > 0 ? String(unreadMessagesCount) : null }]
+      : []),
+  ];
 
   // Navigation Items by Role with clean exact routes and real-time badges
   const navByRole = {
@@ -211,13 +266,7 @@ export function AppShell() {
       { label: 'Student Review Queue', path: '/creator/requests', icon: <CheckSquare className="h-4 w-4" />, badge: pendingRequestsCount > 0 ? String(pendingRequestsCount) : null },
       { label: 'Inbox & Messages', path: '/inbox', icon: <Mail className="h-4 w-4" />, badge: unreadMessagesCount > 0 ? String(unreadMessagesCount) : null },
     ],
-    MODERATOR: [
-      { label: 'Moderator Overview', path: '/moderator', icon: <LayoutDashboard className="h-4 w-4" />, exact: true },
-      { label: 'User Directory (Read-Only)', path: '/moderator/users', icon: <Users className="h-4 w-4" /> },
-      { label: 'Course Quality Review', path: '/moderator/courses', icon: <BookOpen className="h-4 w-4" /> },
-      { label: 'Transfer Requests', path: '/moderator/transfers', icon: <CheckSquare className="h-4 w-4" /> },
-      { label: 'Inbox & Messages', path: '/inbox', icon: <Mail className="h-4 w-4" />, badge: unreadMessagesCount > 0 ? String(unreadMessagesCount) : null },
-    ],
+    MODERATOR: moderatorNavItems,
     USER: [
       { label: 'Course Catalog', path: '/catalog', icon: <BookOpen className="h-4 w-4" /> },
       { label: 'My Learning', path: '/my-courses', icon: <GraduationCap className="h-4 w-4" /> },
@@ -235,6 +284,21 @@ export function AppShell() {
       navigate(`/courses?search=${encodeURIComponent(searchQuery.trim())}`);
     }
   };
+
+  const isExamRoute =
+    location.pathname.startsWith('/assessments/') &&
+    (location.pathname.endsWith('/room') || location.pathname.endsWith('/exam'));
+
+  if (isExamRoute) {
+    return (
+      <div className="min-h-screen bg-app text-app flex flex-col theme-transition">
+        <main className="flex-1 min-w-0 overflow-y-auto">
+          <Outlet />
+        </main>
+        <MustChangePasswordModal />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-app text-app flex flex-col md:flex-row theme-transition">
@@ -380,7 +444,7 @@ export function AppShell() {
                     {user?.name || 'Anonymous'}
                   </p>
                   <p className="text-[10px] text-sidebar-muted truncate">
-                    {user?.department || 'Member'}
+                    {userRole === 'USER' ? 'Learner' : (user?.department || 'Staff')}
                   </p>
                 </div>
               </div>
@@ -543,7 +607,7 @@ export function AppShell() {
                             setNotificationsOpen(false);
                             if (n.link) navigate(n.link);
                           }}
-                          className="p-2.5 rounded-btn bg-elevated border border-app flex items-start gap-2.5 cursor-pointer hover:bg-surface transition-colors"
+                          className="p-2.5 rounded-btn bg-elevated border border-app flex items-start gap-2.5 cursor-pointer hover:bg-slate-200/80 dark:hover:bg-dark-elevated hover:border-brand-500/40 transition-colors"
                         >
                           <span
                             className={cn(
@@ -656,6 +720,9 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      {/* Mandatory Password Reset Modal */}
+      <MustChangePasswordModal />
     </div>
   );
 }

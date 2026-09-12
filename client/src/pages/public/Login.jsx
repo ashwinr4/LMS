@@ -151,9 +151,19 @@ export default function Login() {
         {/* Login Form Card */}
         <div className="bg-card border border-app rounded-card p-6 sm:p-8 space-y-5 shadow-md">
           {error && (
-            <div className="p-3.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-btn text-xs text-red-700 dark:text-red-300 flex items-start gap-2.5 animate-slide-up">
-              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div
+              className={`p-3.5 rounded-btn text-xs flex items-start gap-2.5 animate-slide-up border ${
+                error.toLowerCase().includes('temporary password')
+                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200'
+                  : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+              }`}
+            >
+              {error.toLowerCase().includes('temporary password') ? (
+                <KeyRound className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+              )}
+              <span className="leading-relaxed">{error}</span>
             </div>
           )}
 

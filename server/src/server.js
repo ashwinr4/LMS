@@ -130,6 +130,7 @@ import adminRoutes from './routes/adminRoutes.js';
 import moderatorRoutes from './routes/moderatorRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
+import transferRoutes from './routes/transferRoutes.js';
 
 // 6. Mount Modular API Routes
 app.use('/api/v1/auth', authRoutes);
@@ -141,6 +142,7 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/moderator', moderatorRoutes);
 app.use('/api/v1/chat', chatRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/transfers', transferRoutes);
 
 // 7. Root API Welcome Route
 app.get('/api/v1', (req, res) => {

@@ -1,0 +1,200 @@
+# Implementation Plan — Configurable Moderator Role & Granular Permission System
+
+Implement the **Moderator** role in Qualiva as a single base operational role whose access, navigation, available actions, and workspace are governed entirely by configurable module permissions assigned by an Administrator.
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Single Base Role Principle:** No role fragmentation will take place. The database role will always be `MODERATOR`. Capabilities (e.g. Course Review, Enrollment Approval, User Auditing) are determined entirely by permission flags.
+
+> [!IMPORTANT]
+> **Registration Lifecycle:** When a user registers selecting the `MODERATOR` role, their account is initialized in `PENDING_APPROVAL` status. They cannot log in or perform actions until an Administrator reviews them, sets their specific permissions via a checklist modal, and activates their account.
+
+---
+
+## Proposed Architectural Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as New User
+    actor Admin as System Administrator
+    participant Client as Qualiva Frontend
+    participant Server as Express API
+    participant DB as Neon PostgreSQL
+
+    User->>Client: Registers with Role = "Moderator"
+    Client->>Server: POST /auth/register (status = PENDING_APPROVAL)
+    Server->>DB: Create User (role=MODERATOR, status=PENDING_APPROVAL, permissions=null)
+    Server-->>Admin: Real-time Alert (New Moderator Role Request)
+
+    Admin->>Client: Opens Approvals Hub / User Profile
+    Admin->>Client: Clicks "Approve as Moderator"
+    Client->>Admin: Opens "Moderator Permissions Checklist" Modal
+    Admin->>Client: Ticks authorized modules & actions (e.g., Courses: View+Manage, Enrollments: Approve)
+    Admin->>Client: Clicks "Save Permissions & Activate Account"
+
+    Client->>Server: PUT /api/v1/admin/users/:id/moderator-permissions
+    Server->>DB: Update User (status=ACTIVE, moderatorPermissions=JSON)
+    Server->>DB: Log to AuditLog (previous vs new permissions, admin actor)
+
+    Note over User,Client: Moderator signs in
+    User->>Client: Signs in to Qualiva
+    Client->>Client: Navigation & Dashboard adapt to ticked permissions only
+    Client->>Server: Calls API endpoints
+    Server->>Server: `requireModeratorPermission(module, action)` enforces backend boundaries
+```
+
+---
+
+## Proposed Changes
+
+### 1. Database Schema & Persistence
+
+#### [MODIFY] [schema.prisma](file:///c:/Users/Ashwin/Desktop/LMS/server/prisma/schema.prisma)
+* Add `moderatorPermissions` (`String?` — JSON string) on model `User` storing the module permissions object.
+* Add `requestedRole` (`String?`) on model `User` to track what role the user asked for during registration.
+
+```prisma
+model User {
+  ...
+  role                      String    @default("USER") // ADMIN | MODERATOR | COURSE_CREATOR | USER
+  status                    String    @default("ACTIVE") // ACTIVE | LOCKED | SUSPENDED | PENDING_APPROVAL
+  requestedRole             String?   // Tracks requested tier during registration
+  moderatorPermissions     String?   // JSON object storing granular module permissions
+  ...
+}
+```
+
+---
+
+### 2. Registration & Lifecycle Guard
+
+#### [MODIFY] [authController.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/controllers/authController.js)
+* In `register()`:
+  * If `role === 'MODERATOR'`:
+    * Store `requestedRole: 'MODERATOR'`.
+    * Set account status to `PENDING_APPROVAL`.
+    * Initialize `moderatorPermissions: null`.
+    * Dispatch an in-app notification and real-time socket alert to all Admins (`🔑 New Moderator Role Request`).
+    * Return message: *"Your Moderator access request has been submitted for administrator review and permission provisioning."*
+
+#### [MODIFY] [Register.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/public/Register.jsx)
+* Add a helpful note when "Moderator" is selected in the role dropdown explaining that Moderator accounts undergo administrator review and permission assignment prior to activation.
+
+---
+
+### 3. Backend Authorization Middleware & Controller Endpoints
+
+#### [MODIFY] [auth.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/middleware/auth.js)
+* Create `requireModeratorPermission(moduleName, action)` middleware:
+  * If `req.user.role === 'ADMIN'`: automatically grant access.
+  * If `req.user.role !== 'MODERATOR'`: return `403 Forbidden` (`FORBIDDEN_ROLE`).
+  * Parse `req.user.moderatorPermissions`.
+  * If `permissions[moduleName]?.[action] === true`: allow request.
+  * Otherwise: return `403 Forbidden` with a descriptive message (`Access denied. Missing permission: ${moduleName}.${action}`).
+
+#### [MODIFY] [adminController.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/controllers/adminController.js)
+* Add `updateModeratorPermissions`:
+  * Validates the permission payload against the allowed matrix.
+  * Compares previous permissions with new permissions.
+  * Updates `user.moderatorPermissions` and sets `status = 'ACTIVE'` if previously pending.
+  * Records detailed audit log entries into `AuditLog` for each toggled permission (capturing module, action, previous value, new value, admin email/ID, timestamp).
+* Add `getModeratorPermissionHistory`:
+  * Returns the audit log history filtered for `action = 'MODERATOR_PERMISSION_CHANGED'` on that specific user.
+
+#### [MODIFY] [adminRoutes.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/routes/adminRoutes.js)
+* Register:
+  * `PUT /api/v1/admin/users/:id/moderator-permissions`
+  * `GET /api/v1/admin/users/:id/moderator-permissions/history`
+
+#### [MODIFY] [moderatorRoutes.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/routes/moderatorRoutes.js)
+* Protect existing and new moderator sub-routes with `requireModeratorPermission(module, action)`:
+  * `/users` → `users.view`
+  * `/courses` → `courses.view`
+  * `/courses/:id/status` → `courses.manage`
+  * `/enrollments` → `enrollments.view`
+  * `/enrollments/:id/approve` → `enrollments.approve`
+  * `/transfers` → `transfers.view`
+  * `/transfers/:id/approve` → `transfers.approve`
+  * `/audit-logs` → `auditLogs.view`
+
+---
+
+### 4. Admin UI: Permission Modal & Governance Tab
+
+#### [NEW] [ModeratorPermissionModal.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/components/admin/ModeratorPermissionModal.jsx)
+* Interactive, enterprise-styled checklist modal opened immediately when an Admin approves a Moderator:
+  * **Module Matrix:**
+    * **Users:** `[ ] View` `[ ] Manage`
+    * **Courses:** `[ ] View` `[ ] Manage`
+    * **Enrollments:** `[ ] View` `[ ] Manage` `[ ] Approve`
+    * **Assessments:** `[ ] View` `[ ] Manage`
+    * **Transfers / Reassignments:** `[ ] View` `[ ] Manage` `[ ] Approve`
+    * **Messages:** `[ ] View` `[ ] Manage`
+    * **Audit Logs:** `[ ] View`
+  * **Select All / Clear All per module** helpers.
+  * **Confirm & Activate Button** with loading state.
+
+#### [MODIFY] [AdminApprovals.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/admin/AdminApprovals.jsx)
+* In the approval queue for users with `requestedRole === 'MODERATOR'` or `role === 'MODERATOR'`:
+  * Replace the generic one-click activate with **"Approve & Configure Permissions"**.
+  * Clicking it opens `ModeratorPermissionModal`.
+
+#### [MODIFY] [AdminUserDetail.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/admin/AdminUserDetail.jsx)
+* When viewing a user with `role === 'MODERATOR'`:
+  * Add a dedicated **"Moderator Permissions"** tab.
+  * Shows the full matrix of module checkboxes, editable at any time.
+  * Shows the **Permission History** table below the checklist with change diffs and timestamps.
+
+---
+
+### 5. Frontend Permission-Aware Navigation & Moderator Workspace
+
+#### [MODIFY] [AppShell.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/components/layout/AppShell.jsx)
+* Dynamic `navByRole.MODERATOR`:
+  * Reads `user.moderatorPermissions`.
+  * Only includes links where the respective `view` permission is `true`:
+    * `Dashboard`: Always visible
+    * `User Directory`: visible only if `permissions.users?.view`
+    * `Course Quality Review`: visible only if `permissions.courses?.view`
+    * `Enrollment Approvals`: visible only if `permissions.enrollments?.view`
+    * `Assessment Reviews`: visible only if `permissions.assessments?.view`
+    * `Transfer Requests`: visible only if `permissions.transfers?.view`
+    * `Inbox & Messages`: visible only if `permissions.messages?.view`
+    * `Audit Logs`: visible only if `permissions.auditLogs?.view`
+
+#### [MODIFY] [ModeratorDashboard.jsx](file:///c:/Users/Ashwin/Desktop/LMS/client/src/pages/moderator/ModeratorDashboard.jsx)
+* Adapt dashboard widgets based on active permissions:
+  * If `enrollments` view/approve is enabled: render the *Enrollment Review Queue*.
+  * If `courses` view/manage is enabled: render the *Course Quality Queue*.
+  * If `transfers` view/approve is enabled: render the *Transfer Approvals Widget*.
+  * If `messages` view/manage is enabled: render *Recent Inquiries*.
+* Avoid empty or unauthorized widget cards.
+
+---
+
+## Verification Plan
+
+### Automated / Backend API Verification
+* **Registration Check:** Register a test user with `role: "MODERATOR"`; verify they get `status: "PENDING_APPROVAL"` and cannot sign in immediately.
+* **Permission Enforcement:**
+  * Test calling `GET /api/v1/moderator/courses` with a Moderator who lacks `courses.view` → Must return `403 Forbidden`.
+  * Test calling `POST /api/v1/moderator/enrollments/:id/approve` with a Moderator who has `enrollments.view` but NOT `enrollments.approve` → Must return `403 Forbidden`.
+* **Privilege Escalation Prevention:** Verify a Moderator cannot call `PUT /api/v1/admin/users/:id/moderator-permissions`.
+
+### Manual UI Verification
+1. **Admin Approval Flow:**
+   * Navigate to `http://localhost:5173/admin/approvals`.
+   * Click "Approve & Configure Permissions" on a pending Moderator.
+   * Tick only `Courses → View` and `Enrollments → View + Approve`.
+   * Confirm and save.
+2. **Moderator Navigation Check:**
+   * Log in as the newly approved Moderator.
+   * Verify sidebar only displays *Dashboard*, *Courses*, and *Enrollments*.
+   * Verify *Users*, *Assessments*, *Transfers*, and *Audit Logs* are completely omitted from the sidebar.
+3. **Audit History Check:**
+   * In the Admin panel, toggle another permission (e.g. add `Messages → View`).
+   * Verify the Permission History table updates with the exact diff, timestamp, and Admin name.

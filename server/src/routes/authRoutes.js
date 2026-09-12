@@ -10,6 +10,7 @@ import {
   requestOtp,
   verifyOtp,
   requestPasswordReset,
+  changePassword,
 } from '../controllers/authController.js';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -30,5 +31,6 @@ router.post('/verify-otp', verifyOtp);
 router.get('/me', authenticateToken, getMe);
 router.get('/profile', authenticateToken, getMe);
 router.put('/profile', authenticateToken, updateProfile);
+router.post('/change-password', authenticateToken, changePassword);
 
 export default router;

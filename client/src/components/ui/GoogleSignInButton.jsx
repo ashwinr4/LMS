@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useTheme } from '../../context/ThemeContext.jsx';
 
 export function GoogleSignInButton({ onAuthSuccess, onError, text = 'Continue with Google' }) {
   const { googleAuth } = useAuth();
+  const { theme } = useTheme();
   const googleBtnRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '1063461174979-v1s5a3e5dn8c25v4m12rnidg6p9pl2h2.apps.googleusercontent.com';
+
+  const isDark = theme === 'dark';
 
   const handleCredentialResponse = async (response) => {
     setLoading(true);
@@ -25,23 +29,15 @@ export function GoogleSignInButton({ onAuthSuccess, onError, text = 'Continue wi
   };
 
   useEffect(() => {
-    // Load Google Identity Services script if not already present
-    const existingScript = document.getElementById('google-gsi-script');
-    if (!existingScript) {
-      const script = document.createElement('script');
-      script.id = 'google-gsi-script';
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true;
-      script.defer = true;
-      script.onload = () => initGoogleGsi();
-      document.body.appendChild(script);
-    } else if (window.google?.accounts?.id) {
-      initGoogleGsi();
-    }
+    let isMounted = true;
+    let pollInterval = null;
 
-    function initGoogleGsi() {
+    function renderGoogleButton() {
+      if (!isMounted || !googleBtnRef.current) return false;
       try {
-        if (window.google?.accounts?.id && googleBtnRef.current) {
+        if (window.google?.accounts?.id) {
+          googleBtnRef.current.innerHTML = '';
+
           window.google.accounts.id.initialize({
             client_id: clientId,
             callback: handleCredentialResponse,
@@ -50,19 +46,55 @@ export function GoogleSignInButton({ onAuthSuccess, onError, text = 'Continue wi
           });
 
           window.google.accounts.id.renderButton(googleBtnRef.current, {
-            theme: document.documentElement.classList.contains('dark') ? 'filled_black' : 'outline',
+            theme: isDark ? 'filled_black' : 'outline',
             size: 'large',
             type: 'standard',
-            text: 'continue_with',
+            text: text?.toLowerCase().includes('sign up') ? 'signup_with' : 'signin_with',
             shape: 'pill',
-            width: '100%',
+            width: 240,
+            logo_alignment: 'left',
           });
+          return true;
         }
       } catch (err) {
-        console.warn('Google GSI initialization notice:', err.message);
+        console.warn('Google GSI render error:', err);
       }
+      return false;
     }
-  }, [clientId]);
+
+    // Check if script is already fully loaded
+    if (window.google?.accounts?.id) {
+      renderGoogleButton();
+    } else {
+      // If script tag doesn't exist, inject it
+      const existingScript = document.getElementById('google-gsi-script');
+      if (!existingScript) {
+        const script = document.createElement('script');
+        script.id = 'google-gsi-script';
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.async = true;
+        script.defer = true;
+        script.onload = () => {
+          if (isMounted) renderGoogleButton();
+        };
+        document.body.appendChild(script);
+      }
+
+      // Robust fallback polling in case script is in DOM but initializing asynchronously
+      let attempts = 0;
+      pollInterval = setInterval(() => {
+        attempts++;
+        if (renderGoogleButton() || attempts > 50) {
+          clearInterval(pollInterval);
+        }
+      }, 80);
+    }
+
+    return () => {
+      isMounted = false;
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [clientId, isDark, text]);
 
   const handleFallbackClick = () => {
     try {
@@ -75,9 +107,15 @@ export function GoogleSignInButton({ onAuthSuccess, onError, text = 'Continue wi
   };
 
   return (
-    <div className="w-full space-y-2">
-      {/* Official Google GSI Render Target */}
-      <div ref={googleBtnRef} className="w-full flex justify-center min-h-[42px]" />
+    <div className="w-full flex flex-col items-center">
+      {/* Official Google GSI Render Target with theme key and color-scheme isolation */}
+      <div
+        key={theme}
+        style={{ colorScheme: 'light' }}
+        className="w-full flex justify-center items-center min-h-[44px]"
+      >
+        <div ref={googleBtnRef} className="flex justify-center w-full min-h-[44px]" />
+      </div>
 
       {/* Modern Fallback Button (visible if GSI wrapper takes time or customized) */}
       <noscript>

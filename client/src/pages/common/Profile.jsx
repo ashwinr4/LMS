@@ -8,8 +8,9 @@ import { Avatar } from '../../components/ui/Avatar.jsx';
 import {
   User, Mail, Shield, Building2, MapPin, Calendar, Clock,
   Lock, CheckCircle2, AlertCircle, Camera, Sparkles, RefreshCw,
-  ExternalLink, KeyRound,
+  ExternalLink, KeyRound, Upload,
 } from 'lucide-react';
+import { useRef } from 'react';
 
 const PRESET_AVATARS = [
   'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
@@ -31,6 +32,29 @@ export default function Profile() {
   const [errorMessage, setErrorMessage] = useState(null);
   const [fetching, setFetching] = useState(false);
   const [profileData, setProfileData] = useState(user || {});
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const photoInputRef = useRef(null);
+
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingPhoto(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const { data } = await api.post('/chat/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      if (data.file?.fileUrl) {
+        setAvatar(data.file.fileUrl);
+        setSuccessMessage('Photo selected. Click "Save Profile Changes" to persist.');
+      }
+    } catch (err) {
+      setErrorMessage(err.response?.data?.message || 'Failed to upload photo.');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   // Fetch freshest profile details from server
   useEffect(() => {
@@ -181,11 +205,33 @@ export default function Profile() {
                 <button
                   type="button"
                   onClick={() => setAvatar('')}
-                  className="px-2 py-1 text-[11px] rounded bg-elevated border border-app text-app-muted hover:text-app"
-                  title="Use initials avatar"
+                  className="px-2.5 py-1 text-[11px] font-semibold rounded bg-elevated border border-app text-app-secondary hover:text-app hover:border-brand-500/50 transition-colors"
+                  title="Reset to default Twitter silhouette"
                 >
-                  Initials
+                  Default Silhouette
                 </button>
+              </div>
+
+              {/* Local File Upload Option */}
+              <div className="pt-2">
+                <input
+                  type="file"
+                  ref={photoInputRef}
+                  onChange={handlePhotoUpload}
+                  accept="image/*"
+                  className="hidden"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  isLoading={uploadingPhoto}
+                  onClick={() => photoInputRef.current?.click()}
+                  leftIcon={<Upload className="h-3.5 w-3.5" />}
+                  className="w-full text-xs"
+                >
+                  Upload Custom Photo
+                </Button>
               </div>
 
               {/* Custom Image URL Option */}
@@ -293,24 +339,26 @@ export default function Profile() {
                 <p className="text-[11px] text-app-muted mt-1">Access control scope and administrative tiers.</p>
               </div>
 
-              {/* Read-Only: Department */}
-              <div>
-                <label className="block text-xs font-semibold text-app mb-1.5 flex items-center justify-between">
-                  <span>Department</span>
-                  <span className="text-[10px] text-app-muted flex items-center gap-1 font-normal">
-                    <Lock className="h-3 w-3" /> Fixed
-                  </span>
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    disabled
-                    value={profileData?.department || 'General Enterprise'}
-                    className="w-full px-3.5 py-2.5 rounded-btn border border-app bg-elevated/80 text-app-secondary text-sm cursor-not-allowed opacity-90"
-                  />
-                  <Building2 className="h-4 w-4 text-app-muted absolute right-3.5 top-3" />
+              {/* Read-Only: Department (Only for Staff roles) */}
+              {profileData?.role !== 'USER' && (
+                <div>
+                  <label className="block text-xs font-semibold text-app mb-1.5 flex items-center justify-between">
+                    <span>Department</span>
+                    <span className="text-[10px] text-app-muted flex items-center gap-1 font-normal">
+                      <Lock className="h-3 w-3" /> Fixed
+                    </span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      disabled
+                      value={profileData?.department || 'General Enterprise'}
+                      className="w-full px-3.5 py-2.5 rounded-btn border border-app bg-elevated/80 text-app-secondary text-sm cursor-not-allowed opacity-90"
+                    />
+                    <Building2 className="h-4 w-4 text-app-muted absolute right-3.5 top-3" />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Read-Only: Account Status */}
               <div>

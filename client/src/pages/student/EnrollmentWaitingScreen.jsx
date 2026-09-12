@@ -130,7 +130,12 @@ export default function EnrollmentWaitingScreen() {
               <span className="font-mono text-xs font-bold text-brand-600 dark:text-brand-400 bg-brand-50 dark:bg-brand-950/60 px-2 py-0.5 rounded border border-brand-200 dark:border-brand-800">
                 {module.code}
               </span>
-              <span className="text-xs text-app-muted">{module.department} · {module.level}</span>
+              <span className="meta-divider" />
+              <span className="text-xs text-app-muted flex items-center">
+                <span>{module.department}</span>
+                <span className="meta-divider" />
+                <span>{module.level}</span>
+              </span>
             </div>
             <h2 className="text-lg font-bold text-app">{module.title}</h2>
             <p className="text-xs text-app-secondary mt-1 max-w-xl">{module.description}</p>

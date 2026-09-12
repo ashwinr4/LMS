@@ -1,7 +1,179 @@
 import { useRef, useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { Button } from '../ui/Button.jsx';
+import { CustomDropdown } from '../ui/CustomDropdown.jsx';
 import { Download, ShieldCheck, Printer } from 'lucide-react';
+
+/**
+ * Universal Dynamic Certificate Canvas Engine
+ * Calibrated precisely for the official enterprise certificate template (certi.png: 1492 x 1054 px).
+ * Dynamically overlays real-time Student Name, Course Title, Certificate ID, Issue Date,
+ * and a live scannable QR Code leading directly to the public certificate verification page.
+ */
+// Universal Binary Exporters for High-Fidelity Formats
+function triggerDownload(blobOrDataUrl, filename) {
+  const url = typeof blobOrDataUrl === 'string' ? blobOrDataUrl : URL.createObjectURL(blobOrDataUrl);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  if (typeof blobOrDataUrl !== 'string') {
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  }
+}
+
+// Pure JS Baseline TIFF 6.0 24-bit RGB Serializer
+function canvasToTIFFBlob(canvas) {
+  const width = canvas.width;
+  const height = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const rgba = imgData.data;
+
+  const numEntries = 12;
+  const headerSize = 8;
+  const ifdSize = 2 + numEntries * 12 + 4;
+  const extraDataSize = 6 + 8 + 8; // BitsPerSample(6) + XRes(8) + YRes(8)
+  const dataOffset = headerSize + ifdSize + extraDataSize;
+  const imageByteCount = width * height * 3;
+  const totalFileSize = dataOffset + imageByteCount;
+
+  const buffer = new ArrayBuffer(totalFileSize);
+  const view = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+
+  // Header ("II" - Little Endian)
+  bytes[0] = 0x49;
+  bytes[1] = 0x49;
+  view.setUint16(2, 42, true);
+  view.setUint32(4, 8, true);
+
+  // IFD
+  let offset = 8;
+  view.setUint16(offset, numEntries, true);
+  offset += 2;
+
+  const bitsOffset = headerSize + ifdSize;
+  const xResOffset = bitsOffset + 6;
+  const yResOffset = xResOffset + 8;
+
+  function writeTag(tag, type, count, valOrOffset) {
+    view.setUint16(offset, tag, true);
+    view.setUint16(offset + 2, type, true);
+    view.setUint32(offset + 4, count, true);
+    view.setUint32(offset + 8, valOrOffset, true);
+    offset += 12;
+  }
+
+  writeTag(0x0100, 4, 1, width);              // ImageWidth
+  writeTag(0x0101, 4, 1, height);             // ImageLength
+  writeTag(0x0102, 3, 3, bitsOffset);         // BitsPerSample (8, 8, 8)
+  writeTag(0x0103, 3, 1, 1);                  // Compression (1 = none)
+  writeTag(0x0106, 3, 1, 2);                  // PhotometricInterpretation (2 = RGB)
+  writeTag(0x0111, 4, 1, dataOffset);         // StripOffsets
+  writeTag(0x0115, 3, 1, 3);                  // SamplesPerPixel (3 = RGB)
+  writeTag(0x0116, 4, 1, height);             // RowsPerStrip
+  writeTag(0x0117, 4, 1, imageByteCount);     // StripByteCounts
+  writeTag(0x011A, 5, 1, xResOffset);         // XResolution
+  writeTag(0x011B, 5, 1, yResOffset);         // YResolution
+  writeTag(0x011C, 3, 1, 1);                  // PlanarConfiguration (1 = chunky)
+
+  view.setUint32(offset, 0, true);
+
+  // Extra data values
+  view.setUint16(bitsOffset, 8, true);
+  view.setUint16(bitsOffset + 2, 8, true);
+  view.setUint16(bitsOffset + 4, 8, true);
+
+  view.setUint32(xResOffset, 300, true);
+  view.setUint32(xResOffset + 4, 1, true);
+
+  view.setUint32(yResOffset, 300, true);
+  view.setUint32(yResOffset + 4, 1, true);
+
+  // Write pixel RGB data
+  let p = dataOffset;
+  for (let i = 0; i < rgba.length; i += 4) {
+    bytes[p++] = rgba[i];
+    bytes[p++] = rgba[i + 1];
+    bytes[p++] = rgba[i + 2];
+  }
+
+  return new Blob([buffer], { type: 'image/tiff' });
+}
+
+// Pure JS ISO-32000 Landscape PDF Binary Serializer
+function canvasToPDFBlob(canvas) {
+  const width = canvas.width;
+  const height = canvas.height;
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+  const base64Data = dataUrl.split(',')[1];
+  const binaryString = window.atob(base64Data);
+  const jpegBytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    jpegBytes[i] = binaryString.charCodeAt(i);
+  }
+
+  const contentStream = `q\n${width} 0 0 ${height} 0 0 cm\n/Img Do\nQ\n`;
+  const enc = new TextEncoder();
+
+  const header = `%PDF-1.4\n%\xE2\xE3\xCF\xD3\n`;
+  const obj1 = `1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n`;
+  const obj2 = `2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n`;
+  const obj3 = `3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /XObject << /Img 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`;
+  const obj4Header = `4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`;
+  const obj4Footer = `\nendstream\nendobj\n`;
+  const obj5 = `5 0 obj\n<< /Length ${contentStream.length} >>\nstream\n${contentStream}endstream\nendobj\n`;
+
+  const hBytes = enc.encode(header);
+  const o1Bytes = enc.encode(obj1);
+  const o2Bytes = enc.encode(obj2);
+  const o3Bytes = enc.encode(obj3);
+  const o4HBytes = enc.encode(obj4Header);
+  const o4FBytes = enc.encode(obj4Footer);
+  const o5Bytes = enc.encode(obj5);
+
+  const offset1 = hBytes.length;
+  const offset2 = offset1 + o1Bytes.length;
+  const offset3 = offset2 + o2Bytes.length;
+  const offset4 = offset3 + o3Bytes.length;
+  const offset5 = offset4 + o4HBytes.length + jpegBytes.length + o4FBytes.length;
+  const xrefOffset = offset5 + o5Bytes.length;
+
+  const pad10 = (n) => String(n).padStart(10, '0');
+  const xref = `xref\n0 6\n0000000000 65535 f \n${pad10(offset1)} 00000 n \n${pad10(offset2)} 00000 n \n${pad10(offset3)} 00000 n \n${pad10(offset4)} 00000 n \n${pad10(offset5)} 00000 n \n`;
+  const trailer = `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+
+  const xrefBytes = enc.encode(xref);
+  const trailerBytes = enc.encode(trailer);
+
+  const totalLength = xrefOffset + xrefBytes.length + trailerBytes.length;
+  const fullBuffer = new Uint8Array(totalLength);
+
+  let cur = 0;
+  fullBuffer.set(hBytes, cur); cur += hBytes.length;
+  fullBuffer.set(o1Bytes, cur); cur += o1Bytes.length;
+  fullBuffer.set(o2Bytes, cur); cur += o2Bytes.length;
+  fullBuffer.set(o3Bytes, cur); cur += o3Bytes.length;
+  fullBuffer.set(o4HBytes, cur); cur += o4HBytes.length;
+  fullBuffer.set(jpegBytes, cur); cur += jpegBytes.length;
+  fullBuffer.set(o4FBytes, cur); cur += o4FBytes.length;
+  fullBuffer.set(o5Bytes, cur); cur += o5Bytes.length;
+  fullBuffer.set(xrefBytes, cur); cur += xrefBytes.length;
+  fullBuffer.set(trailerBytes, cur); cur += trailerBytes.length;
+
+  return new Blob([fullBuffer], { type: 'application/pdf' });
+}
+
+const FORMAT_OPTIONS = [
+  { value: 'pdf', label: 'PDF Document (.pdf)' },
+  { value: 'png', label: 'PNG Image (.png)' },
+  { value: 'avif', label: 'AVIF Image (.avif)' },
+  { value: 'tiff', label: 'TIFF Image (.tiff)' },
+  { value: 'webp', label: 'WebP Image (.webp)' },
+];
 
 /**
  * Universal Dynamic Certificate Canvas Engine
@@ -20,6 +192,7 @@ export function CertificateCanvas({
   const canvasRef = useRef(null);
   const [downloading, setDownloading] = useState(false);
   const [rendered, setRendered] = useState(false);
+  const [selectedFormat, setSelectedFormat] = useState('pdf');
 
   const formattedDate = new Date(issuedAt).toLocaleDateString('en-GB', {
     day: 'numeric',
@@ -183,27 +356,63 @@ export function CertificateCanvas({
     };
   }, [studentName, courseTitle, certificateCode, issuedAt, verificationHash, templateUrl]);
 
-  // Download High-Resolution PNG (1492 x 1054)
-  const handleDownloadPNG = () => {
+  // Unified Multi-Format Exporter
+  const handleDownload = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     setDownloading(true);
+
     try {
-      const dataUrl = canvas.toDataURL('image/png', 1.0);
-      const link = document.createElement('a');
-      link.download = `Certificate-${certificateCode}.png`;
-      link.href = dataUrl;
-      link.click();
+      const filename = `Certificate-${certificateCode}.${selectedFormat}`;
+
+      if (selectedFormat === 'pdf') {
+        const blob = canvasToPDFBlob(canvas);
+        triggerDownload(blob, filename);
+      } else if (selectedFormat === 'tiff') {
+        const blob = canvasToTIFFBlob(canvas);
+        triggerDownload(blob, filename);
+      } else if (selectedFormat === 'webp') {
+        canvas.toBlob((blob) => {
+          if (blob) {
+            triggerDownload(blob, filename);
+          } else {
+            const dataUrl = canvas.toDataURL('image/webp', 0.98);
+            triggerDownload(dataUrl, filename);
+          }
+        }, 'image/webp', 0.98);
+      } else if (selectedFormat === 'avif') {
+        canvas.toBlob((blob) => {
+          if (blob && blob.type === 'image/avif') {
+            triggerDownload(blob, filename);
+          } else {
+            // High-resolution fallback for browsers without native AVIF canvas encoding
+            canvas.toBlob((pngBlob) => {
+              triggerDownload(pngBlob, filename);
+            }, 'image/png');
+          }
+        }, 'image/avif', 0.95);
+      } else {
+        // PNG Default
+        canvas.toBlob((blob) => {
+          if (blob) {
+            triggerDownload(blob, filename);
+          } else {
+            const dataUrl = canvas.toDataURL('image/png', 1.0);
+            triggerDownload(dataUrl, filename);
+          }
+        }, 'image/png', 1.0);
+      }
+    } catch (err) {
+      console.error('Error exporting certificate:', err);
     } finally {
-      setDownloading(false);
+      setTimeout(() => setDownloading(false), 400);
     }
   };
 
-  // Download Print-Ready PDF
-  const handleDownloadPDF = () => {
+  // Instant Browser Landscape Print
+  const handlePrint = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    setDownloading(true);
     try {
       const dataUrl = canvas.toDataURL('image/png', 1.0);
       const printWindow = window.open('', '_blank');
@@ -227,8 +436,8 @@ export function CertificateCanvas({
         `);
         printWindow.document.close();
       }
-    } finally {
-      setDownloading(false);
+    } catch (err) {
+      console.error('Failed to open print dialog:', err);
     }
   };
 
@@ -246,31 +455,49 @@ export function CertificateCanvas({
       {/* Action Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-card border border-app rounded-card">
         <div className="flex items-center gap-2 text-xs text-app-secondary">
-          <ShieldCheck className="h-4 w-4 text-emerald-500" />
+          <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
           <span>Real-time Verified Credential • Live Scannable QR</span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Format Selection Dropdown */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-app-muted font-medium select-none">Format:</span>
+            <CustomDropdown
+              value={selectedFormat}
+              onChange={(val) => setSelectedFormat(val)}
+              options={FORMAT_OPTIONS}
+              size="sm"
+              direction="up"
+              className="w-48"
+              placeholder="Select format"
+              aria-label="Select certificate format"
+            />
+          </div>
+
+          {/* Download Button */}
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={handleDownload}
+            disabled={!rendered || downloading}
+            leftIcon={<Download className="h-4 w-4" />}
+            className="bg-brand-600 hover:bg-brand-700 text-white font-semibold shadow-sm"
+          >
+            {downloading ? 'Preparing...' : `Download ${selectedFormat.toUpperCase()}`}
+          </Button>
+
+          {/* Print Button */}
           <Button
             type="button"
             variant="secondary"
             size="sm"
-            onClick={handleDownloadPNG}
-            disabled={!rendered || downloading}
-            leftIcon={<Download className="h-4 w-4" />}
-          >
-            Download PNG
-          </Button>
-
-          <Button
-            type="button"
-            size="sm"
-            onClick={handleDownloadPDF}
+            onClick={handlePrint}
             disabled={!rendered || downloading}
             leftIcon={<Printer className="h-4 w-4" />}
-            className="bg-brand-600 hover:bg-brand-700 text-white font-semibold shadow-sm"
           >
-            Download / Print PDF
+            Print
           </Button>
         </div>
       </div>

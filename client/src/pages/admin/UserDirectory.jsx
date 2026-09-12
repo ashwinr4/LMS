@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api.js';
 import { useSocket } from '../../context/SocketContext.jsx';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
@@ -28,8 +29,12 @@ import {
   UserCheck,
   UserX,
 } from 'lucide-react';
+import { CustomDropdown } from '../../components/ui/CustomDropdown.jsx';
+import { Avatar } from '../../components/ui/Avatar.jsx';
+import { SegmentedToggle } from '../../components/ui/SegmentedToggle.jsx';
 
 export default function UserDirectory() {
+  const navigate = useNavigate();
   const { socket } = useSocket();
   const [users, setUsers] = useState([]);
   const [stats, setStats] = useState(null);
@@ -324,50 +329,36 @@ export default function UserDirectory() {
 
         {/* Filter Controls: Role Dropdown & Status Toggle */}
         <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-          {/* Role Dropdown */}
+          {/* Role Custom Dropdown Filter */}
           <div className="flex items-center gap-2">
             <label htmlFor="role-filter" className="text-xs font-semibold text-app-secondary">
               Role:
             </label>
-            <select
+            <CustomDropdown
               id="role-filter"
               value={selectedRole}
-              onChange={(e) => setSelectedRole(e.target.value)}
-              className="h-9 px-3 py-1.5 text-xs font-medium rounded-btn bg-elevated border border-app text-app focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer"
-            >
-              <option value="ALL">All Roles</option>
-              <option value="ADMIN">Administrator</option>
-              <option value="COURSE_CREATOR">Course Creator</option>
-              <option value="MODERATOR">Moderator</option>
-              <option value="USER">User / Learner</option>
-            </select>
+              onChange={setSelectedRole}
+              options={[
+                { value: 'ALL', label: 'All Roles' },
+                { value: 'ADMIN', label: 'Administrator' },
+                { value: 'COURSE_CREATOR', label: 'Course Creator' },
+                { value: 'MODERATOR', label: 'Moderator' },
+                { value: 'USER', label: 'User / Learner' },
+              ]}
+            />
           </div>
 
-          {/* All / Active Toggle */}
-          <div className="inline-flex items-center p-0.5 rounded-btn bg-elevated border border-app text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => setSelectedStatus('ALL')}
-              className={`px-3 py-1.5 rounded-btn transition-all ${
-                selectedStatus === 'ALL'
-                  ? 'bg-brand-500 text-white shadow-sm'
-                  : 'text-app-secondary hover:text-app'
-              }`}
-            >
-              All
-            </button>
-            <button
-              type="button"
-              onClick={() => setSelectedStatus('ACTIVE')}
-              className={`px-3 py-1.5 rounded-btn transition-all ${
-                selectedStatus === 'ACTIVE'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-app-secondary hover:text-app'
-              }`}
-            >
-              Active
-            </button>
-          </div>
+          {/* All / Active Segmented Sliding Toggle */}
+          <SegmentedToggle
+            options={[
+              { id: 'ALL', label: 'All' },
+              { id: 'ACTIVE', label: 'Active' },
+            ]}
+            value={selectedStatus}
+            onChange={setSelectedStatus}
+            size="xs"
+            color="brand"
+          />
         </div>
       </div>
 
@@ -402,17 +393,26 @@ export default function UserDirectory() {
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-app">
+              <tbody>
                 {users.map((u) => (
-                  <tr key={u.id} className="hover:bg-surface-tertiary/30 transition-colors">
+                  <tr
+                    key={u.id}
+                    onClick={() => navigate(`/admin/users/${u.id}`)}
+                    className="table-row-inset-divider hover:bg-surface-tertiary/40 dark:hover:bg-dark-elevated/40 transition-colors cursor-pointer group"
+                    title="Click to view and edit user details"
+                  >
                     {/* User Info */}
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-brand-500/10 border border-brand-500/20 text-brand-600 dark:text-brand-400 flex items-center justify-center font-bold text-xs shrink-0">
-                          {u.name?.charAt(0)}
-                        </div>
+                        <Avatar
+                          src={u.avatar}
+                          name={u.name}
+                          size="sm"
+                        />
                         <div>
-                          <p className="font-bold text-app">{u.name}</p>
+                          <p className="font-bold text-app group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
+                            {u.name}
+                          </p>
                           <p className="text-app-secondary font-mono text-[11px]">{u.email}</p>
                         </div>
                       </div>
@@ -421,7 +421,11 @@ export default function UserDirectory() {
                     {/* Department & Role */}
                     <td className="py-3.5 px-4">
                       <div className="space-y-0.5">
-                        <p className="font-semibold text-sm text-app">{u.department || 'General'}</p>
+                        {u.role === 'USER' ? (
+                          <span className="text-app-muted italic text-[11px] block">Learner</span>
+                        ) : (
+                          <p className="font-semibold text-sm text-app">{u.department || 'General'}</p>
+                        )}
                         <p
                           className={`text-xs ${
                             u.role === 'ADMIN'
@@ -463,7 +467,7 @@ export default function UserDirectory() {
                     </td>
 
                     {/* Actions */}
-                    <td className="py-3.5 px-4 text-right">
+                    <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-3">
                         {u.status === 'LOCKED' || u.status === 'SUSPENDED' ? (
                           <button
@@ -566,16 +570,17 @@ export default function UserDirectory() {
             </div>
             <div className="space-y-1">
               <label className="text-xs font-bold text-app-secondary uppercase">RBAC Role</label>
-              <select
+              <CustomDropdown
                 value={createForm.role}
-                onChange={(e) => setCreateForm({ ...createForm, role: e.target.value })}
-                className="w-full bg-surface dark:bg-dark-surface border border-app rounded-btn p-2 text-xs text-app"
-              >
-                <option value="USER">Student / Standard User</option>
-                <option value="COURSE_CREATOR">Course Creator</option>
-                <option value="MODERATOR">Moderator</option>
-                <option value="ADMIN">Administrator</option>
-              </select>
+                onChange={(val) => setCreateForm({ ...createForm, role: val })}
+                options={[
+                  { value: 'USER', label: 'Student / Standard User' },
+                  { value: 'COURSE_CREATOR', label: 'Course Creator' },
+                  { value: 'MODERATOR', label: 'Moderator' },
+                  { value: 'ADMIN', label: 'Administrator' },
+                ]}
+                className="w-full"
+              />
             </div>
           </div>
 

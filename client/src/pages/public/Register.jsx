@@ -16,6 +16,7 @@ import {
   ArrowRight,
   ArrowLeft,
   ShieldCheck,
+  Shield,
   KeyRound,
   Check,
   RotateCcw,
@@ -53,6 +54,7 @@ export default function Register() {
 
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState(false);
 
   const departments = [
     'Engineering',
@@ -242,13 +244,18 @@ export default function Register() {
     setLoading(true);
 
     try {
-      await register({
+      const res = await register({
         name: formData.name,
         email: formData.email,
         password: formData.password,
         department: formData.department,
         role: formData.role,
       });
+
+      if (res?.pendingApproval) {
+        setPendingConfirmation(true);
+        return;
+      }
 
       redirectByRole(formData.role);
     } catch (err) {
@@ -364,7 +371,31 @@ export default function Register() {
 
         {/* Wizard Form Container */}
         <div className="bg-card border border-app rounded-card p-6 sm:p-8 space-y-6 shadow-md">
-          {error && (
+          {pendingConfirmation ? (
+            <div className="text-center py-6 space-y-4 animate-fade-in">
+              <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-600 dark:text-amber-400">
+                <ShieldCheck className="h-6 w-6" />
+              </div>
+              <div className="space-y-1.5">
+                <h2 className="text-lg font-bold text-app">Access Request Submitted</h2>
+                <p className="text-xs text-app-secondary max-w-sm mx-auto leading-relaxed">
+                  Your registration requesting the <strong className="text-app">Moderator</strong> role has been securely queued. A platform administrator will verify your profile and configure your authorized module permissions.
+                </p>
+              </div>
+              <div className="p-3 rounded bg-elevated border border-app text-xs text-app-muted font-mono max-w-xs mx-auto">
+                Status: PENDING_APPROVAL
+              </div>
+              <div className="pt-2">
+                <Link to="/login">
+                  <Button variant="outline" size="sm">
+                    Return to Sign In
+                  </Button>
+                </Link>
+              </div>
+            </div>
+          ) : (
+            <>
+              {error && (
             <div className="p-3.5 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-btn text-xs text-red-700 dark:text-red-300 flex items-start gap-2.5 animate-slide-up">
               <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{error}</span>
@@ -408,14 +439,16 @@ export default function Register() {
                     options={roles}
                   />
 
-                  <Select
-                    label="Department"
-                    value={googleOnboarding.department}
-                    onChange={(e) =>
-                      setGoogleOnboarding((prev) => ({ ...prev, department: e.target.value }))
-                    }
-                    options={departments}
-                  />
+                  {googleOnboarding.role !== 'USER' && (
+                    <Select
+                      label="Department"
+                      value={googleOnboarding.department}
+                      onChange={(e) =>
+                        setGoogleOnboarding((prev) => ({ ...prev, department: e.target.value }))
+                      }
+                      options={departments}
+                    />
+                  )}
 
                   <div className="p-3.5 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800/60 rounded-btn text-xs text-blue-800 dark:text-blue-300 flex items-start gap-2.5">
                     <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
@@ -544,18 +577,29 @@ export default function Register() {
                     />
 
                     <Select
-                      label="Department"
-                      value={formData.department}
-                      onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                      options={departments}
-                    />
-
-                    <Select
                       label="Target Role Access"
                       value={formData.role}
                       onChange={(e) => setFormData({ ...formData, role: e.target.value })}
                       options={roles}
                     />
+
+                    {formData.role !== 'USER' && (
+                      <Select
+                        label="Department"
+                        value={formData.department}
+                        onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                        options={departments}
+                      />
+                    )}
+
+                    {formData.role === 'MODERATOR' && (
+                      <div className="p-2.5 rounded bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                        <Shield className="h-4 w-4 shrink-0 mt-0.5" />
+                        <span>
+                          Moderator privileges operate under administrative review. Your account will be provisioned with granular operational permissions upon admin approval.
+                        </span>
+                      </div>
+                    )}
 
                     <Button
                       type="submit"
@@ -674,22 +718,33 @@ export default function Register() {
                       <span className="text-app-secondary">Corporate Email</span>
                       <span className="font-mono text-app">{formData.email}</span>
                     </div>
-                    <div className="flex justify-between py-1 border-b border-app">
-                      <span className="text-app-secondary">Department</span>
-                      <span className="text-app">{formData.department}</span>
-                    </div>
+                    {formData.role !== 'USER' && (
+                      <div className="flex justify-between py-1 border-b border-app">
+                        <span className="text-app-secondary">Department</span>
+                        <span className="text-app">{formData.department}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between py-1">
                       <span className="text-app-secondary">Requested Role</span>
                       <span className="font-bold text-brand-600 dark:text-brand-400">{formData.role}</span>
                     </div>
                   </div>
 
-                  <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-btn text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-2.5">
-                    <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" />
-                    <span>
-                      Zero-Trust Dual-Token security and audit logging will be activated for this profile upon creation.
-                    </span>
-                  </div>
+                  {formData.role === 'MODERATOR' ? (
+                    <div className="p-3.5 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-btn text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
+                      <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                      <span>
+                        Moderator role requests are routed to Platform Administrators for identity verification and permission allocation prior to access activation.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-btn text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-2.5">
+                      <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" />
+                      <span>
+                        Zero-Trust Dual-Token security and audit logging will be activated for this profile upon creation.
+                      </span>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-3 pt-2">
                     <Button
@@ -709,13 +764,15 @@ export default function Register() {
                       className="w-2/3"
                       rightIcon={<CheckCircle2 className="h-4 w-4" />}
                     >
-                      Create Account
+                      {formData.role === 'MODERATOR' ? 'Submit Role Request' : 'Create Account'}
                     </Button>
                   </div>
                 </form>
               )}
             </>
           )}
+        </>
+      )}
 
           <div className="pt-4 border-t border-app text-center text-xs text-app-secondary">
             <span>Already have an account? </span>

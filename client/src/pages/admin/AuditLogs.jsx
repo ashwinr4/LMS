@@ -4,6 +4,7 @@ import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { Input } from '../../components/ui/Input.jsx';
+import { CustomDropdown } from '../../components/ui/CustomDropdown.jsx';
 import {
   ShieldAlert,
   Search,
@@ -15,6 +16,51 @@ import {
   RefreshCw,
   Terminal,
 } from 'lucide-react';
+
+const RISK_OPTIONS = [
+  { value: 'ALL', label: 'All Risks' },
+  { value: 'LOW', label: 'Low' },
+  { value: 'MEDIUM', label: 'Medium' },
+  { value: 'HIGH', label: 'High' },
+];
+
+function formatAuditDetails(log) {
+  if (!log?.details) return '—';
+  try {
+    let parsed = log.details;
+    if (typeof parsed === 'string' && (parsed.trim().startsWith('{') || parsed.trim().startsWith('['))) {
+      parsed = JSON.parse(parsed);
+    }
+    if (typeof parsed === 'object' && parsed !== null) {
+      if (parsed.summary) {
+        return parsed.summary;
+      }
+      if (parsed.module && parsed.actionType) {
+        const state = parsed.current !== undefined ? (parsed.current ? 'Enabled' : 'Disabled') : '';
+        const capAction = parsed.actionType.charAt(0).toUpperCase() + parsed.actionType.slice(1);
+        const capModule = parsed.module.charAt(0).toUpperCase() + parsed.module.slice(1);
+        return `${state ? state + ' ' : ''}${capAction} permission on ${capModule} module`;
+      }
+      if (parsed.role) {
+        return `Role changed to ${parsed.role}`;
+      }
+      if (parsed.status) {
+        return `Status updated to ${parsed.status}`;
+      }
+      const entries = Object.entries(parsed).filter(
+        ([k]) => !['userId', 'id', 'actorId', 'token', 'hash'].includes(k)
+      );
+      if (entries.length > 0) {
+        return entries
+          .map(([k, v]) => `${k.replace(/([A-Z])/g, ' $1').toLowerCase().trim()}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+          .join(' • ');
+      }
+    }
+  } catch (_) {
+    // Fall back to original plain string
+  }
+  return log.details;
+}
 
 export default function AuditLogs() {
   const [logs, setLogs] = useState([]);
@@ -99,22 +145,19 @@ export default function AuditLogs() {
             )}
           </span>
 
-          {/* Clean Dropdown Filter (Matches User Management) */}
+          {/* Clean Dropdown Filter */}
           <div className="flex items-center gap-2">
-            <label htmlFor="risk-filter" className="text-xs font-semibold text-app-secondary">
+            <span className="text-xs font-semibold text-app-secondary">
               Risk:
-            </label>
-            <select
+            </span>
+            <CustomDropdown
               id="risk-filter"
+              aria-label="Filter by Risk"
               value={selectedRisk}
-              onChange={(e) => setSelectedRisk(e.target.value)}
-              className="h-9 px-3 py-1.5 text-xs font-medium rounded-btn bg-elevated border border-app text-app focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer"
-            >
-              <option value="ALL">All Risks</option>
-              <option value="LOW">Low Risk</option>
-              <option value="MEDIUM">Medium Risk</option>
-              <option value="HIGH">High Risk</option>
-            </select>
+              onChange={setSelectedRisk}
+              options={RISK_OPTIONS}
+              className="w-36"
+            />
           </div>
         </div>
       </div>
@@ -169,11 +212,11 @@ export default function AuditLogs() {
                     </td>
 
                     {/* Details */}
-                    <td className="py-3.5 px-4 text-app-secondary max-w-md truncate">
-                      {log.details || '—'}
+                    <td className="py-3.5 px-4 text-app-secondary max-w-md truncate" title={typeof log.details === 'string' ? log.details : ''}>
+                      {formatAuditDetails(log)}
                     </td>
 
-                    {/* Humanized Risk Level (No AI Capsules) */}
+                    {/* Humanized Risk Level */}
                     <td className="py-3.5 px-4 text-right whitespace-nowrap">
                       <span
                         className={`text-xs ${
@@ -184,7 +227,7 @@ export default function AuditLogs() {
                             : 'text-emerald-600 dark:text-emerald-400 font-medium'
                         }`}
                       >
-                        {log.riskLevel === 'HIGH' ? 'High Risk' : log.riskLevel === 'MEDIUM' ? 'Medium Risk' : 'Low Risk'}
+                        {log.riskLevel === 'HIGH' ? 'High' : log.riskLevel === 'MEDIUM' ? 'Medium' : 'Low'}
                       </span>
                     </td>
                   </tr>

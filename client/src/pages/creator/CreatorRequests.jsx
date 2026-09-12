@@ -49,8 +49,19 @@ export default function CreatorRequests() {
         fetchQueue();
       }
     };
+    const handleResolved = (data) => {
+      if (data?.requestId) {
+        setRequests((prev) => prev.filter((r) => r.id !== data.requestId));
+      } else {
+        fetchQueue();
+      }
+    };
     socket.on('creator_new_request', handleNew);
-    return () => socket.off('creator_new_request', handleNew);
+    socket.on('creator_request_resolved', handleResolved);
+    return () => {
+      socket.off('creator_new_request', handleNew);
+      socket.off('creator_request_resolved', handleResolved);
+    };
   }, [socket, fetchQueue]);
 
   // Handle Endorsement & Forward to Admin

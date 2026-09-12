@@ -4,6 +4,7 @@ import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
+import { CustomDropdown } from '../../components/ui/CustomDropdown.jsx';
 import {
   FileCheck2,
   Plus,
@@ -240,7 +241,9 @@ export default function CreatorAssessments() {
                   <span className="font-mono text-xs font-bold text-brand-600 dark:text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded border border-brand-500/20">
                     {a.moduleCode}
                   </span>
-                  <span className="text-xs text-app-secondary">• {a.moduleTitle}</span>
+                  <span className="meta-divider" />
+                  <span className="text-xs text-app-secondary">{a.moduleTitle}</span>
+                  <span className="meta-divider" />
                   <StatusBadge status="ACTIVE" label={`${a.questionCount} Questions`} size="xs" />
                 </div>
 
@@ -289,19 +292,13 @@ export default function CreatorAssessments() {
           <div className="grid md:grid-cols-2 gap-4">
             <div className="space-y-1">
               <label className="text-xs font-bold text-app-secondary uppercase">Associated Course Module</label>
-              <select
+              <CustomDropdown
                 value={formData.moduleId}
-                onChange={(e) => setFormData({ ...formData, moduleId: e.target.value })}
-                className="w-full bg-surface dark:bg-dark-surface border border-app rounded-btn p-2.5 text-xs text-app"
-                disabled={!!editingAssessment}
-                required
-              >
-                {modules.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.code} - {m.title}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setFormData({ ...formData, moduleId: val })}
+                options={modules.map((m) => ({ value: m.id, label: `${m.code} - ${m.title}` }))}
+                className="w-full"
+                placeholder="Select Course Module"
+              />
             </div>
 
             <div className="space-y-1">

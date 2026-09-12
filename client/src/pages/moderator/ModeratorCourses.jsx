@@ -71,8 +71,14 @@ export default function ModeratorCourses() {
                     <span className="font-mono text-xs font-bold text-brand-600 dark:text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded border border-brand-500/20">
                       {c.code}
                     </span>
+                    <span className="meta-divider" />
                     <StatusBadge status={c.status} size="xs" />
-                    <span className="text-xs text-app-secondary">• {c.department}</span>
+                    {c.department && (
+                      <>
+                        <span className="meta-divider" />
+                        <span className="text-xs text-app-secondary">{c.department}</span>
+                      </>
+                    )}
                   </div>
 
                   <div>

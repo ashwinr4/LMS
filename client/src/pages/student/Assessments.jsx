@@ -116,7 +116,9 @@ export default function Assessments() {
                     <span className="font-mono text-xs font-bold text-brand-600 dark:text-brand-400 bg-brand-500/10 px-2.5 py-0.5 rounded border border-brand-500/20">
                       {exam.moduleCode}
                     </span>
-                    <span className="text-xs text-app-secondary font-medium">• {exam.moduleTitle}</span>
+                    <span className="meta-divider" />
+                    <span className="text-xs text-app-secondary font-medium">{exam.moduleTitle}</span>
+                    <span className="meta-divider" />
                     {hasPassed ? (
                       <StatusBadge status="COMPLETED" label="Certified" size="xs" />
                     ) : exam.isUnlocked ? (
@@ -139,12 +141,6 @@ export default function Assessments() {
                       <span>{exam.durationMinutes} Minutes Time Limit</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <FileCheck2 className="h-3.5 w-3.5 text-brand-500" />
-                      <span>
-                        {exam.sampleSize} Questions sampled (from {exam.questionCount})
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
                       <ShieldCheck className="h-3.5 w-3.5 text-teal-500" />
                       <span>{exam.passingScore}% Pass Threshold</span>
                     </div>
@@ -154,6 +150,17 @@ export default function Assessments() {
                     <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-btn w-fit">
                       <Lock className="h-3.5 w-3.5" />
                       <span>Course Progress: {exam.courseProgress}% (80% required to unlock)</span>
+                    </div>
+                  )}
+
+                  {exam.cooldown && (
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-red-600 dark:text-red-400 pt-0.5">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        {exam.cooldown.isDisqualified
+                          ? `Suspended: 3 violations limit exceeded. Available in ${exam.cooldown.formattedTime}.`
+                          : `Retake Cooldown: Available in ${exam.cooldown.formattedTime}.`}
+                      </span>
                     </div>
                   )}
 
@@ -167,7 +174,19 @@ export default function Assessments() {
 
                 {/* Action CTA */}
                 <div className="flex flex-col sm:flex-row lg:flex-col items-stretch lg:items-end justify-center gap-2.5 shrink-0 min-w-[200px]">
-                  {hasPassed ? (
+                  {exam.cooldown ? (
+                    <Button
+                      variant="secondary"
+                      size="md"
+                      leftIcon={<Lock className="h-4 w-4 text-red-500" />}
+                      disabled
+                      className="w-full opacity-60 cursor-not-allowed text-xs font-semibold"
+                    >
+                      {exam.cooldown.isDisqualified
+                        ? `Locked (${exam.cooldown.formattedTime})`
+                        : `Cooldown (${exam.cooldown.formattedTime})`}
+                    </Button>
+                  ) : hasPassed ? (
                     <>
                       <Button
                         variant="primary"

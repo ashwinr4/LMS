@@ -7,24 +7,15 @@ import { Modal } from '../../components/ui/Modal.jsx';
 import { CertificateCanvas } from '../../components/certificate/CertificateCanvas.jsx';
 import {
   Award,
-  ShieldCheck,
-  Download,
   Printer,
   ExternalLink,
-  Calendar,
-  Sparkles,
-  Copy,
-  Check,
   AlertCircle,
-  FileCheck2,
-  BookOpen,
 } from 'lucide-react';
 
 export default function Certificates() {
   const [certificates, setCertificates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [copiedCode, setCopiedCode] = useState(null);
   const [previewCert, setPreviewCert] = useState(null);
 
   useEffect(() => {
@@ -47,12 +38,6 @@ export default function Certificates() {
     }
   };
 
-  const handleCopy = (text, id) => {
-    navigator.clipboard.writeText(text);
-    setCopiedCode(id);
-    setTimeout(() => setCopiedCode(null), 2500);
-  };
-
   const handlePrint = () => {
     window.print();
   };
@@ -61,7 +46,7 @@ export default function Certificates() {
     <div className="space-y-8 animate-fade-in pb-12">
       <PageHeader
         title="Official Graduation Certificates"
-        description="Tamper-proof cryptographic credentials backed by immutable SHA-256 hashing. All certificates are globally verifiable."
+        description="Official verified credentials awarded upon successful completion of course curriculum and proctored examinations."
       />
 
       {loading ? (
@@ -100,23 +85,18 @@ export default function Certificates() {
                 className="bg-card border-2 border-teal-500/30 rounded-card p-6 space-y-5 shadow-sm hover:shadow-dialog transition-all duration-200 flex flex-col justify-between"
               >
                 <div className="space-y-4">
-                  {/* Top Header */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Award className="h-5 w-5 text-teal-500" />
-                      <span className="font-mono text-xs font-bold text-app bg-surface-tertiary dark:bg-dark-elevated px-2 py-0.5 rounded border border-app">
-                        {cert.code}
-                      </span>
+                  {/* Top Header with Topic next to Icon */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <Award className="h-5 w-5 text-teal-500 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-base text-app leading-snug">{cert.courseTitle}</h3>
+                        <p className="text-xs text-app-secondary mt-0.5">
+                          {cert.department || 'Enterprise Academy'} {cert.duration ? `• ${cert.duration}` : ''}
+                        </p>
+                      </div>
                     </div>
-                    <StatusBadge status="VERIFIED" size="xs" />
-                  </div>
-
-                  {/* Course Title */}
-                  <div>
-                    <h3 className="font-bold text-base text-app">{cert.courseTitle}</h3>
-                    <p className="text-xs text-app-secondary mt-0.5">
-                      {cert.department || 'Enterprise Academy'} {cert.duration ? `• ${cert.duration}` : ''}
-                    </p>
+                    <StatusBadge status="VERIFIED" size="xs" className="shrink-0" />
                   </div>
 
                   {/* Score & Issue Details Card */}
@@ -136,32 +116,6 @@ export default function Certificates() {
                           day: 'numeric',
                         })}
                       </span>
-                    </div>
-                  </div>
-
-                  {/* SHA-256 Hash Box */}
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between text-[11px] text-app-secondary font-medium">
-                      <span>Cryptographic SHA-256 Hash:</span>
-                      <button
-                        onClick={() => handleCopy(cert.verificationHash, cert.id)}
-                        className="text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1"
-                      >
-                        {copiedCode === cert.id ? (
-                          <>
-                            <Check className="h-3 w-3 text-emerald-500" />
-                            <span className="text-emerald-500">Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3 w-3" />
-                            <span>Copy Hash</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <div className="p-2.5 bg-surface dark:bg-dark-surface rounded border border-app text-[10px] font-mono text-app-muted truncate select-all">
-                      {cert.verificationHash}
                     </div>
                   </div>
                 </div>

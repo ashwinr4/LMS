@@ -27,6 +27,7 @@ const NotFound = lazy(() => import('../pages/public/NotFound.jsx'));
 const AdminDashboard = lazy(() => import('../pages/admin/AdminDashboard.jsx'));
 const AdminApprovals = lazy(() => import('../pages/admin/AdminApprovals.jsx'));
 const UserDirectory = lazy(() => import('../pages/admin/UserDirectory.jsx'));
+const AdminUserDetail = lazy(() => import('../pages/admin/AdminUserDetail.jsx'));
 const CourseManagement = lazy(() => import('../pages/admin/CourseManagement.jsx'));
 const AuditLogs = lazy(() => import('../pages/admin/AuditLogs.jsx'));
 
@@ -39,7 +40,9 @@ const CourseStudio = lazy(() => import('../pages/creator/CourseStudio.jsx'));
 // Lazy-Loaded Moderator Portals
 const ModeratorDashboard = lazy(() => import('../pages/moderator/ModeratorDashboard.jsx'));
 const ModeratorUsers = lazy(() => import('../pages/moderator/ModeratorUsers.jsx'));
+const ModeratorUserDetail = lazy(() => import('../pages/moderator/ModeratorUserDetail.jsx'));
 const ModeratorCourses = lazy(() => import('../pages/moderator/ModeratorCourses.jsx'));
+const ModeratorTransfers = lazy(() => import('../pages/moderator/ModeratorTransfers.jsx'));
 
 // Lazy-Loaded Student Portals
 const CourseCatalog = lazy(() => import('../pages/student/CourseCatalog.jsx'));
@@ -176,6 +179,14 @@ export function AppRoutes() {
           }
         />
         <Route
+          path="admin/users/:userId"
+          element={
+            <ProtectedRoute allowedRoles={['ADMIN']}>
+              <AdminUserDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="admin/courses"
           element={
             <ProtectedRoute allowedRoles={['ADMIN']}>
@@ -285,10 +296,26 @@ export function AppRoutes() {
           }
         />
         <Route
+          path="moderator/users/:userId"
+          element={
+            <ProtectedRoute allowedRoles={['MODERATOR', 'ADMIN']}>
+              <ModeratorUserDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="moderator/courses"
           element={
             <ProtectedRoute allowedRoles={['MODERATOR', 'ADMIN']}>
               <ModeratorCourses />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="moderator/transfers"
+          element={
+            <ProtectedRoute allowedRoles={['MODERATOR', 'ADMIN']}>
+              <ModeratorTransfers />
             </ProtectedRoute>
           }
         />

@@ -28,6 +28,8 @@ model User {
   isFirstLogin              Boolean   @default(true)
   googleId                  String?
   lastActive                DateTime  @default(now())
+  requestedRole             String?
+  moderatorPermissions     String?   // JSON string of granular module permissions
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
 
@@ -292,6 +294,10 @@ model ChatMessage {
   recipientName   String?
   recipientRole   String?
   content         String
+  fileUrl         String?
+  fileName        String?
+  fileType        String?
+  fileSize        Int?
   read            Boolean   @default(false)
   createdAt       DateTime  @default(now())
 
@@ -301,3 +307,33 @@ model ChatMessage {
   @@index([senderId])
   @@index([recipientId])
 }
+
+// 13. Dynamic Course Transfer & SLA Extension Requests
+model TransferRequest {
+  id                String    @id @default(uuid())
+  requestId         String    @unique // e.g. TR-1082
+  studentId         String
+  studentName       String
+  studentEmail      String
+  department        String?
+  type              String    // COURSE_TRANSFER | SLA_EXTENSION | COHORT_SHIFT
+  typeLabel         String
+  currentCourseId   String?
+  currentCourse     String
+  targetCourseId    String?
+  targetCourse      String?
+  reason            String
+  currentDeadline   DateTime?
+  requestedDeadline DateTime?
+  status            String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewedById      String?
+  reviewedByName    String?
+  reviewedAt        DateTime?
+  adminNotes        String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([studentId])
+}
+

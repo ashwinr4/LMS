@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { cn, initials } from '../../utils/cn.js';
+import { cn } from '../../utils/cn.js';
+import { DefaultAvatar } from './DefaultAvatar.jsx';
 
 export function Avatar({ src, name, size = 'md', className, status }) {
   const [imgError, setImgError] = useState(false);
@@ -35,15 +36,10 @@ export function Avatar({ src, name, size = 'md', className, status }) {
           )}
         />
       ) : (
-        <div
-          className={cn(
-            'rounded-full bg-blue-600 text-white font-bold flex items-center justify-center border border-blue-500/40 shadow-xs select-none',
-            sizeMap[size] || sizeMap.md,
-            className
-          )}
-        >
-          {initials(name || 'User')}
-        </div>
+        <DefaultAvatar
+          size={size}
+          className={cn('shadow-xs', className)}
+        />
       )}
 
       {status && (

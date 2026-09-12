@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useSocket } from '../../context/SocketContext.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { Avatar } from '../../components/ui/Avatar.jsx';
+import { SegmentedToggle } from '../../components/ui/SegmentedToggle.jsx';
 import {
   Megaphone,
   Users,
@@ -17,19 +20,49 @@ import {
   ChevronRight,
   RefreshCw,
   UserCheck,
+  Paperclip,
+  FileText,
+  Download,
+  X,
+  CheckCheck,
 } from 'lucide-react';
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
 
 export default function Inbox() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState('ANNOUNCEMENT'); // 'ANNOUNCEMENT' | 'COMMUNITY' | 'DIRECT' | 'AUDIT'
+  const { socket } = useSocket();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Tab persistence with URL search param
+  const activeTab = searchParams.get('tab') || 'ANNOUNCEMENT';
+  const handleTabChange = (tabId) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('tab', tabId);
+        return next;
+      },
+      { replace: true }
+    );
+  };
+
   const [messages, setMessages] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [selectedContact, setSelectedContact] = useState(null);
   const [content, setContent] = useState('');
+  const [selectedFile, setSelectedFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const isAdmin = user?.role === 'ADMIN';
 
@@ -82,26 +115,114 @@ export default function Inbox() {
     }
   }, [activeTab, fetchContacts]);
 
+  // Real-time socket message listeners for instant delivery
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleAnnouncement = (msg) => {
+      if (activeTab === 'ANNOUNCEMENT') {
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      }
+    };
+
+    const handleCommunity = (msg) => {
+      if (activeTab === 'COMMUNITY') {
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      }
+    };
+
+    const handleDirect = (msg) => {
+      if (activeTab === 'DIRECT') {
+        if (
+          (selectedContact && (msg.senderId === selectedContact.id || msg.recipientId === selectedContact.id)) ||
+          msg.senderId === user?.id
+        ) {
+          setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        }
+      }
+      fetchContacts();
+    };
+
+    const handleAudit = (msg) => {
+      if (isAdmin && activeTab === 'AUDIT') {
+        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      }
+    };
+
+    socket.on('new_announcement', handleAnnouncement);
+    socket.on('new_community_message', handleCommunity);
+    socket.on('new_direct_message', handleDirect);
+    socket.on('admin_message_audit', handleAudit);
+
+    return () => {
+      socket.off('new_announcement', handleAnnouncement);
+      socket.off('new_community_message', handleCommunity);
+      socket.off('new_direct_message', handleDirect);
+      socket.off('admin_message_audit', handleAudit);
+    };
+  }, [socket, activeTab, selectedContact, isAdmin, user?.id, fetchContacts]);
+
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  // Send message
+  // Send message with instant optimistic UI response and file upload support
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!content.trim() || sending) return;
+    const textToSend = content.trim();
+    if ((!textToSend && !selectedFile) || sending) return;
 
     setSending(true);
+
+    let uploadedFileInfo = null;
     try {
+      if (selectedFile) {
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        const { data: uploadRes } = await api.post('/chat/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        uploadedFileInfo = uploadRes.file;
+      }
+
+      const tempId = `temp-${Date.now()}`;
+      const optimisticMessage = {
+        id: tempId,
+        type: activeTab === 'AUDIT' ? 'COMMUNITY' : activeTab,
+        content: textToSend,
+        fileUrl: uploadedFileInfo?.fileUrl,
+        fileName: uploadedFileInfo?.fileName,
+        fileType: uploadedFileInfo?.fileType,
+        fileSize: uploadedFileInfo?.fileSize,
+        senderId: user?.id,
+        senderName: user?.name,
+        senderRole: user?.role,
+        recipientId: activeTab === 'DIRECT' ? selectedContact?.id : undefined,
+        recipientName: activeTab === 'DIRECT' ? selectedContact?.name : undefined,
+        createdAt: new Date().toISOString(),
+        isOptimistic: true,
+      };
+
+      // Instant local state dispatch
+      setMessages((prev) => [...prev, optimisticMessage]);
+      setContent('');
+      setSelectedFile(null);
+
       const payload = {
         type: activeTab === 'AUDIT' ? 'COMMUNITY' : activeTab,
-        content: content.trim(),
+        content: textToSend,
         recipientId: activeTab === 'DIRECT' ? selectedContact?.id : undefined,
+        fileUrl: uploadedFileInfo?.fileUrl,
+        fileName: uploadedFileInfo?.fileName,
+        fileType: uploadedFileInfo?.fileType,
+        fileSize: uploadedFileInfo?.fileSize,
       };
 
       const { data } = await api.post('/chat/messages', payload);
-      setMessages((prev) => [...prev, data.message]);
-      setContent('');
+      // Replace optimistic placeholder with real persisted record
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempId ? data.message : m))
+      );
     } catch (err) {
       alert(err.response?.data?.message || 'Could not send message.');
     } finally {
@@ -127,62 +248,19 @@ export default function Inbox() {
           </p>
         </div>
 
-        {/* Channel Selection Buttons */}
-        <div className="flex items-center gap-1.5 p-1 bg-elevated border border-app rounded-btn overflow-x-auto scrollbar-none text-xs">
-          <button
-            type="button"
-            onClick={() => setActiveTab('ANNOUNCEMENT')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold transition-all shrink-0 ${
-              activeTab === 'ANNOUNCEMENT'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'text-app-secondary hover:text-app'
-            }`}
-          >
-            <Megaphone className="h-3.5 w-3.5" />
-            <span>Announcements</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('COMMUNITY')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold transition-all shrink-0 ${
-              activeTab === 'COMMUNITY'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'text-app-secondary hover:text-app'
-            }`}
-          >
-            <Users className="h-3.5 w-3.5" />
-            <span>Community Support</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('DIRECT')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold transition-all shrink-0 ${
-              activeTab === 'DIRECT'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'text-app-secondary hover:text-app'
-            }`}
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            <span>Direct Messages</span>
-          </button>
-
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => setActiveTab('AUDIT')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-semibold transition-all shrink-0 ${
-                activeTab === 'AUDIT'
-                  ? 'bg-purple-600 text-white shadow-xs'
-                  : 'text-purple-600 dark:text-purple-400 hover:bg-purple-500/10'
-              }`}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              <span>Admin Audit View</span>
-            </button>
-          )}
-        </div>
+        {/* Channel Selection Buttons with Smooth Sliding Capsule */}
+        <SegmentedToggle
+          options={[
+            { id: 'ANNOUNCEMENT', label: 'Announcements', icon: <Megaphone className="h-3.5 w-3.5" /> },
+            { id: 'COMMUNITY', label: 'Community Support', icon: <Users className="h-3.5 w-3.5" /> },
+            { id: 'DIRECT', label: 'Direct Messages', icon: <MessageSquare className="h-3.5 w-3.5" /> },
+            ...(isAdmin ? [{ id: 'AUDIT', label: 'Admin Audit View', icon: <ShieldCheck className="h-3.5 w-3.5" /> }] : []),
+          ]}
+          value={activeTab}
+          onChange={handleTabChange}
+          size="sm"
+          color={activeTab === 'AUDIT' ? 'purple' : 'blue'}
+        />
       </div>
 
       {/* Main Messaging Container */}
@@ -311,12 +389,13 @@ export default function Inbox() {
           </div>
 
           {/* Messages Feed */}
-          <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-4 max-h-[460px] scrollbar-thin">
+          <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-3.5 max-h-[460px] scrollbar-thin">
             {messages.map((msg) => {
               const isMe = msg.senderId === user?.id;
               const formattedTime = new Date(msg.createdAt).toLocaleTimeString([], {
-                hour: '2-digit',
+                hour: 'numeric',
                 minute: '2-digit',
+                hour12: true,
               });
 
               return (
@@ -324,27 +403,92 @@ export default function Inbox() {
                   key={msg.id}
                   className={`flex flex-col ${isMe && activeTab !== 'AUDIT' ? 'items-end' : 'items-start'} space-y-1`}
                 >
-                  <div className="flex items-center gap-2 text-[11px] text-app-muted">
-                    <span className="font-bold text-app">{msg.senderName}</span>
-                    <span className="font-mono text-[10px] px-1.5 py-0.2 rounded bg-elevated border border-app">
-                      {msg.senderRole}
-                    </span>
-                    {activeTab === 'AUDIT' && msg.recipientName && (
-                      <span className="text-[10px] text-purple-600 dark:text-purple-400">
-                        → to {msg.recipientName} ({msg.recipientRole})
+                  {/* Sender & Role Info (only on received messages, or in audit compliance) */}
+                  {(!isMe || activeTab === 'AUDIT') && (
+                    <div className="flex items-center gap-1.5 text-[11px] px-1 text-app-muted">
+                      <span className="font-bold text-app">{msg.senderName}</span>
+                      <span className="text-[10px] text-app-secondary font-medium tracking-wide uppercase">
+                        {msg.senderRole}
                       </span>
-                    )}
-                    <span>• {formattedTime}</span>
-                  </div>
+                      {activeTab === 'AUDIT' && msg.recipientName && (
+                        <span className="text-[10px] text-purple-600 dark:text-purple-400 font-medium">
+                          → {msg.recipientName} ({msg.recipientRole})
+                        </span>
+                      )}
+                    </div>
+                  )}
 
+                  {/* Compact, Proportional Bubble */}
                   <div
-                    className={`p-3 rounded-card text-xs max-w-lg leading-relaxed shadow-xs ${
+                    className={`px-3.5 py-2 rounded-2xl text-xs shadow-xs leading-relaxed max-w-[85%] sm:max-w-md ${
                       isMe && activeTab !== 'AUDIT'
-                        ? 'bg-blue-600 text-white rounded-tr-none'
-                        : 'bg-elevated border border-app text-app rounded-tl-none'
+                        ? 'bg-blue-600 text-white rounded-tr-xs'
+                        : 'bg-elevated border border-app text-app rounded-tl-xs'
                     }`}
                   >
-                    {msg.content}
+                    {/* Attachment preview if present */}
+                    {msg.fileUrl && (
+                      <div className="mb-2">
+                        {msg.fileType?.startsWith('image/') ? (
+                          <a
+                            href={msg.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block rounded-lg overflow-hidden border border-white/20 hover:opacity-95 transition-opacity"
+                          >
+                            <img
+                              src={msg.fileUrl}
+                              alt={msg.fileName || 'Attachment'}
+                              className="max-h-60 w-full object-cover rounded-md"
+                            />
+                          </a>
+                        ) : (
+                          <a
+                            href={msg.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={msg.fileName}
+                            className={`flex items-center gap-2.5 p-2.5 rounded-lg border transition-all ${
+                              isMe && activeTab !== 'AUDIT'
+                                ? 'bg-blue-700/60 border-blue-400/30 text-white hover:bg-blue-700'
+                                : 'bg-surface dark:bg-dark-surface border-app text-app hover:border-brand-500/50'
+                            }`}
+                          >
+                            <div className="p-2 rounded-md bg-black/10 dark:bg-white/10 shrink-0">
+                              <FileText className="h-5 w-5" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-semibold text-xs truncate">
+                                {msg.fileName || 'Document'}
+                              </p>
+                              <p className="text-[10px] opacity-75 font-mono">
+                                {formatFileSize(msg.fileSize)}
+                              </p>
+                            </div>
+                            <Download className="h-4 w-4 shrink-0 opacity-80 hover:opacity-100" />
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Content & Inline Timestamp */}
+                    <div className="flex items-end justify-between gap-3 flex-wrap">
+                      {msg.content && (
+                        <span className="whitespace-pre-wrap break-words text-xs leading-relaxed flex-1 min-w-[60px]">
+                          {msg.content}
+                        </span>
+                      )}
+                      <span
+                        className={`inline-flex items-center gap-1 text-[10px] font-mono shrink-0 ml-auto select-none ${
+                          isMe && activeTab !== 'AUDIT' ? 'text-blue-200/90' : 'text-app-muted'
+                        }`}
+                      >
+                        {formattedTime}
+                        {isMe && activeTab !== 'AUDIT' && (
+                          <CheckCheck className="h-3 w-3 inline text-blue-200" />
+                        )}
+                      </span>
+                    </div>
                   </div>
                 </div>
               );
@@ -373,30 +517,75 @@ export default function Inbox() {
                 <span>Read-only compliance audit stream. Real-time message oversight is active.</span>
               </div>
             ) : (
-              <form onSubmit={handleSendMessage} className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  placeholder={
-                    activeTab === 'ANNOUNCEMENT'
-                      ? 'Broadcast a platform announcement to all users...'
-                      : activeTab === 'DIRECT'
-                      ? `Message ${selectedContact?.name || 'user'} directly...`
-                      : 'Message platform staff (Admin & Moderator) for support...'
-                  }
-                  className="flex-1 h-10 px-3.5 text-xs rounded-btn bg-elevated border border-app text-app focus:ring-1 focus:ring-blue-500"
-                />
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={!content.trim() || sending}
-                  isLoading={sending}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold shrink-0"
-                  leftIcon={<Send className="h-3.5 w-3.5" />}
-                >
-                  Send
-                </Button>
+              <form onSubmit={handleSendMessage} className="space-y-2">
+                {/* File Attachment Staging Preview */}
+                {selectedFile && (
+                  <div className="flex items-center justify-between px-3 py-1.5 bg-elevated border border-brand-500/30 rounded-btn text-xs text-app animate-fade-in">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileText className="h-4 w-4 text-brand-500 shrink-0" />
+                      <span className="font-semibold truncate max-w-xs">{selectedFile.name}</span>
+                      <span className="text-[10px] text-app-muted font-mono shrink-0">
+                        ({formatFileSize(selectedFile.size)})
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFile(null)}
+                      className="p-1 hover:text-red-500 text-app-muted transition-colors"
+                      title="Remove file"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        setSelectedFile(e.target.files[0]);
+                      }
+                    }}
+                    className="hidden"
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,image/*"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Attach document, spreadsheet, PDF, or file"
+                    className="h-10 w-10 flex items-center justify-center rounded-btn bg-elevated border border-app text-app-secondary hover:text-app hover:border-brand-500/50 transition-colors shrink-0"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </button>
+
+                  <input
+                    type="text"
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                    placeholder={
+                      activeTab === 'ANNOUNCEMENT'
+                        ? 'Broadcast a platform announcement to all users...'
+                        : activeTab === 'DIRECT'
+                        ? `Message ${selectedContact?.name || 'user'} directly...`
+                        : 'Message platform staff (Admin & Moderator) for support...'
+                    }
+                    className="flex-1 h-10 px-3.5 text-xs rounded-btn bg-elevated border border-app text-app focus:ring-1 focus:ring-blue-500"
+                  />
+
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={(!content.trim() && !selectedFile) || sending}
+                    isLoading={sending}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold shrink-0"
+                    leftIcon={<Send className="h-3.5 w-3.5" />}
+                  >
+                    Send
+                  </Button>
+                </div>
               </form>
             )}
           </div>

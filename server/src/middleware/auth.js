@@ -37,6 +37,8 @@ export async function authenticateToken(req, res, next) {
           department: true,
           avatar: true,
           lockUntil: true,
+          moderatorPermissions: true,
+          requestedRole: true,
         },
       });
 
@@ -61,6 +63,14 @@ export async function authenticateToken(req, res, next) {
           success: false,
           error: 'ACCOUNT_SUSPENDED',
           message: 'Account has been suspended by an administrator.',
+        });
+      }
+
+      if (user.status === 'PENDING_APPROVAL') {
+        return res.status(403).json({
+          success: false,
+          error: 'ACCOUNT_PENDING_APPROVAL',
+          message: 'Account pending administrator verification and activation.',
         });
       }
 
@@ -109,4 +119,58 @@ export function requireActiveStatus(req, res, next) {
     });
   }
   next();
+}
+
+/**
+ * Granular Moderator Permission Guard
+ * Allows ADMIN unconditionally; for MODERATOR, verifies moduleName.action in user's permissions
+ */
+export function requireModeratorPermission(moduleName, action) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'UNAUTHENTICATED',
+        message: 'Authentication required.',
+      });
+    }
+
+    // Administrators always possess full operational authority
+    if (req.user.role === 'ADMIN') {
+      return next();
+    }
+
+    if (req.user.role !== 'MODERATOR') {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN_ROLE',
+        message: 'Access restricted to operational Moderators and Administrators.',
+      });
+    }
+
+    let perms = {};
+    try {
+      if (req.user.moderatorPermissions) {
+        perms =
+          typeof req.user.moderatorPermissions === 'string'
+            ? JSON.parse(req.user.moderatorPermissions)
+            : req.user.moderatorPermissions;
+      }
+    } catch {
+      perms = {};
+    }
+
+    const isPermitted = Boolean(perms[moduleName]?.[action]);
+
+    if (!isPermitted) {
+      logger.warn(`Moderator Permission Denied: ${req.user.email} lacking '${moduleName}.${action}'`);
+      return res.status(403).json({
+        success: false,
+        error: 'MODERATOR_PERMISSION_DENIED',
+        message: `Access denied. Your Moderator account does not have authorization for: [${moduleName} -> ${action}].`,
+      });
+    }
+
+    next();
+  };
 }

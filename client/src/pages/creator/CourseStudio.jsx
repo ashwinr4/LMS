@@ -1041,7 +1041,11 @@ export default function CourseStudio() {
                     <StatusBadge status={c.status} size="xs" />
                   </div>
                   <p className="font-bold text-slate-900 dark:text-white leading-snug line-clamp-2">{c.title}</p>
-                  <p className="text-slate-600 dark:text-slate-300 mt-1 font-normal">{c.department} · {c.level}</p>
+                  <p className="text-slate-600 dark:text-slate-300 mt-1 font-normal flex items-center">
+                    <span>{c.department}</span>
+                    <span className="meta-divider" />
+                    <span>{c.level}</span>
+                  </p>
                 </button>
               ))}
             </div>
@@ -1073,9 +1077,20 @@ export default function CourseStudio() {
                       <span className="font-mono text-xs font-bold text-white bg-blue-600 px-2.5 py-0.5 rounded shadow-xs">
                         {courseDetails.code}
                       </span>
+                      <span className="meta-divider" />
                       <StatusBadge status={courseDetails.status} size="xs" />
-                      <span className="text-xs text-app-muted font-medium">• {courseDetails.level}</span>
-                      <span className="text-xs text-app-muted font-medium">• {courseDetails.department}</span>
+                      {courseDetails.level && (
+                        <>
+                          <span className="meta-divider" />
+                          <span className="text-xs text-app-muted font-medium">{courseDetails.level}</span>
+                        </>
+                      )}
+                      {courseDetails.department && (
+                        <>
+                          <span className="meta-divider" />
+                          <span className="text-xs text-app-muted font-medium">{courseDetails.department}</span>
+                        </>
+                      )}
                     </div>
                     <h2 className="text-xl font-bold text-app tracking-tight">{courseDetails.title}</h2>
                     {courseDetails.description && (
@@ -1385,15 +1400,15 @@ export default function CourseStudio() {
                     </div>
 
                     {finalExam && (
-                      <div className="p-3 rounded-btn bg-surface dark:bg-dark-surface border border-app flex flex-wrap items-center gap-4 text-xs font-mono">
+                      <div className="p-3 rounded-btn bg-surface dark:bg-dark-surface border border-app flex flex-wrap items-center gap-2 text-xs font-mono">
                         <span className="text-app-muted">
                           Passing Threshold: <strong className="text-blue-600 dark:text-blue-400">{finalExam.passingScore}%</strong>
                         </span>
-                        <span className="text-app-muted">•</span>
+                        <span className="meta-divider" />
                         <span className="text-app-muted">
                           Exam Questions: <strong className="text-app">{finalExam.sampleSize} Questions per Attempt</strong>
                         </span>
-                        <span className="text-app-muted">•</span>
+                        <span className="meta-divider" />
                         <span className="text-app-muted">
                           Time Limit: <strong className="text-app">{finalExam.durationMinutes || 30} Minutes</strong>
                         </span>

@@ -171,7 +171,7 @@ export async function forwardToAdmin(req, res) {
           title: 'Enrollment Application Endorsed',
           message: `Instructor endorsed ${updated.student.name} for ${updated.module.title}. Final approval required.`,
           type: 'ENROLLMENT_REQUEST',
-          link: '/admin/approvals',
+          link: '/admin/approvals?tab=enrollments',
           metadata: JSON.stringify({ requestId: updated.id, moduleId: updated.moduleId }),
         },
       });
@@ -190,7 +190,12 @@ export async function forwardToAdmin(req, res) {
         title: 'Enrollment Application Endorsed',
         message: `Instructor endorsed ${updated.student.name} for ${updated.module.title}. Final approval required.`,
         type: 'ENROLLMENT_REQUEST',
-        link: '/admin/approvals',
+        link: '/admin/approvals?tab=enrollments',
+      });
+
+      // Decrement Creator Queue
+      io.to('role_COURSE_CREATOR').emit('creator_request_resolved', {
+        requestId: updated.id,
       });
 
       // Update Student Live Waiting Room
@@ -318,6 +323,9 @@ export async function approveEnrollment(req, res) {
         type: 'APPROVAL',
         link: `/courses/${request.moduleId}/learn`,
       });
+
+      // Synchronize Admin Queue Badge
+      io.to('role_ADMIN').emit('admin_request_resolved', { requestId: request.id });
     }
 
     logger.info(`Enrollment Request [${id}] APPROVED by Admin [${req.user.id}]. Assignment [${assignment.id}] provisioned.`);
@@ -340,13 +348,13 @@ export async function approveEnrollment(req, res) {
 export async function rejectEnrollment(req, res) {
   try {
     const { id } = req.params;
-    const { rejectionReason = 'Application does not meet prerequisite requirements at this time.' } = req.body;
+    const { rejectionReason = 'Application requirements were not met at this time.' } = req.body;
 
     const request = await prisma.courseEnrollmentRequest.findUnique({
       where: { id },
       include: {
-        student: true,
-        module: true,
+        student: { select: { id: true, name: true, email: true } },
+        module: { select: { id: true, title: true } },
       },
     });
 
@@ -388,6 +396,13 @@ export async function rejectEnrollment(req, res) {
         moduleTitle: request.module.title,
         reason: rejectionReason,
       });
+
+      // Synchronize Queue Badges
+      if (req.user.role === 'ADMIN') {
+        io.to('role_ADMIN').emit('admin_request_resolved', { requestId: request.id });
+      } else {
+        io.to('role_COURSE_CREATOR').emit('creator_request_resolved', { requestId: request.id });
+      }
     }
 
     return res.status(200).json({

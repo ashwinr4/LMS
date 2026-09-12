@@ -9,6 +9,7 @@ import {
   getMyExams,
   startExam,
   submitExam,
+  exitExam,
   extractQuestionsFromDocument,
 } from '../controllers/assessmentController.js';
 import { authenticateToken, requireRoles } from '../middleware/auth.js';
@@ -32,6 +33,7 @@ router.post(
 router.get('/my-exams', authenticateToken, getMyExams);
 router.get('/:id/start', authenticateToken, startExam);
 router.post('/:id/submit', authenticateToken, submitExam);
+router.post('/:id/exit', authenticateToken, exitExam);
 
 // ── Creator & Admin Question Bank Routes ──
 router.get('/', authenticateToken, requireRoles('COURSE_CREATOR', 'ADMIN'), listAssessments);

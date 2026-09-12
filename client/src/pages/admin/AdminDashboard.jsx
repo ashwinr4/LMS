@@ -147,7 +147,9 @@ export default function AdminDashboard() {
     };
   }, [socket, fetchDashboardSummary]);
 
-  const { stats, recentApprovals, recentActivity } = data;
+  const stats = data?.stats || {};
+  const recentApprovals = data?.recentApprovals || [];
+  const recentActivity = data?.recentActivity || [];
 
   return (
     <div className="space-y-8 animate-fade-in">

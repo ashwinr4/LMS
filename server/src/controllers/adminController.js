@@ -50,6 +50,8 @@ export async function listUsers(req, res) {
           failedLoginAttempts: true,
           lockUntil: true,
           lastActive: true,
+          requestedRole: true,
+          moderatorPermissions: true,
           passwordResetRequested: true,
           passwordResetRequestedAt: true,
           createdAt: true,
@@ -160,6 +162,214 @@ export async function createUser(req, res) {
 }
 
 /**
+ * GET /api/v1/admin/users/:id
+ * Retrieve complete user record including assignments, certificates, and submissions
+ */
+export async function getUserDetail(req, res) {
+  try {
+    const { id } = req.params;
+
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        status: true,
+        department: true,
+        phone: true,
+        location: true,
+        avatar: true,
+        mustChangePassword: true,
+        failedLoginAttempts: true,
+        lockUntil: true,
+        isFirstLogin: true,
+        googleId: true,
+        lastActive: true,
+        requestedRole: true,
+        moderatorPermissions: true,
+        createdAt: true,
+        updatedAt: true,
+        assignments: {
+          include: {
+            module: {
+              select: {
+                id: true,
+                code: true,
+                title: true,
+                department: true,
+                duration: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+        certificates: {
+          select: {
+            id: true,
+            certificateCode: true,
+            courseTitle: true,
+            scoreAchieved: true,
+            issuedAt: true,
+            status: true,
+            verificationHash: true,
+          },
+          orderBy: { issuedAt: 'desc' },
+        },
+        submissions: {
+          include: {
+            assessment: {
+              select: {
+                id: true,
+                title: true,
+                passingScore: true,
+              },
+            },
+          },
+          orderBy: { submittedAt: 'desc' },
+          take: 15,
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'User not found.' });
+    }
+
+    // Security check: Administrator profiles and records are strictly restricted to Admins only
+    if (req.user.role !== 'ADMIN' && user.role === 'ADMIN') {
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'Administrator profiles and records are confidential and restricted to Administrators only.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      user,
+    });
+  } catch (error) {
+    logger.error(`Admin Get User Detail Error: ${error.message}`);
+    return res.status(500).json({ success: false, error: 'FETCH_FAILED', message: error.message });
+  }
+}
+
+/**
+ * PUT /api/v1/admin/users/:id
+ * Update user details, role, department, status, and security settings
+ */
+export async function updateUserDetail(req, res) {
+  try {
+    const { id } = req.params;
+    const {
+      name,
+      email,
+      department,
+      phone,
+      location,
+      role,
+      status,
+      mustChangePassword,
+      resetLockout,
+      temporaryPassword,
+    } = req.body;
+
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'User not found.' });
+    }
+
+    if (email && email.toLowerCase().trim() !== existing.email.toLowerCase()) {
+      const emailTaken = await prisma.user.findUnique({
+        where: { email: email.toLowerCase().trim() },
+      });
+      if (emailTaken) {
+        return res.status(409).json({ success: false, error: 'EMAIL_EXISTS', message: 'Email address is already in use by another user.' });
+      }
+    }
+
+    // Prevent self-lockout or self-demotion
+    if (id === req.user.id) {
+      if (status && (status === 'LOCKED' || status === 'SUSPENDED')) {
+        return res.status(400).json({ success: false, error: 'SELF_LOCK_FORBIDDEN', message: 'You cannot lock or suspend your own administrator account.' });
+      }
+      if (role && role !== 'ADMIN') {
+        return res.status(400).json({ success: false, error: 'SELF_DEMOTION_FORBIDDEN', message: 'You cannot revoke your own administrator role.' });
+      }
+    }
+
+    const updateData = {};
+    if (name !== undefined) updateData.name = name.trim();
+    if (email !== undefined) updateData.email = email.toLowerCase().trim();
+    if (department !== undefined) updateData.department = department ? department.trim() : null;
+    if (phone !== undefined) updateData.phone = phone ? phone.trim() : null;
+    if (location !== undefined) updateData.location = location ? location.trim() : null;
+    if (role !== undefined) updateData.role = role;
+    if (status !== undefined) updateData.status = status;
+    if (mustChangePassword !== undefined) updateData.mustChangePassword = Boolean(mustChangePassword);
+
+    if (resetLockout || status === 'ACTIVE') {
+      updateData.failedLoginAttempts = 0;
+      updateData.lockUntil = null;
+    }
+
+    if (temporaryPassword && temporaryPassword.trim().length >= 6) {
+      updateData.passwordHash = await bcrypt.hash(temporaryPassword.trim(), 12);
+      updateData.mustChangePassword = true;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: updateData,
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        status: true,
+        department: true,
+        phone: true,
+        location: true,
+        mustChangePassword: true,
+        failedLoginAttempts: true,
+        lockUntil: true,
+        updatedAt: true,
+      },
+    });
+
+    if (status === 'LOCKED' || status === 'SUSPENDED') {
+      await prisma.activeSession.updateMany({
+        where: { userId: id },
+        data: { isRevoked: true },
+      });
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        actorName: req.user.name,
+        action: 'USER_UPDATED_BY_ADMIN',
+        resource: `User: ${updatedUser.email}`,
+        details: `Admin modified fields: ${Object.keys(updateData).join(', ')}`,
+        riskLevel: 'LOW',
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'User details updated successfully.',
+      user: updatedUser,
+    });
+  } catch (error) {
+    logger.error(`Admin Update User Detail Error: ${error.message}`);
+    return res.status(500).json({ success: false, error: 'UPDATE_FAILED', message: error.message });
+  }
+}
+
+/**
  * PATCH /api/v1/admin/users/:id/status
  * Update user status: ACTIVE | LOCKED | SUSPENDED
  */
@@ -205,6 +415,10 @@ export async function updateUserStatus(req, res) {
         riskLevel: status === 'ACTIVE' ? 'LOW' : 'MEDIUM',
       },
     });
+
+    if (io) {
+      io.to('role_ADMIN').emit('admin_request_resolved', { userId: id, status });
+    }
 
     logger.info(`Admin ${req.user.email} changed user ${user.email} status to ${status}`);
     return res.status(200).json({ success: true, message: `User status updated to ${status}.`, user });
@@ -784,17 +998,36 @@ export async function listModeratorUsers(req, res) {
     const skip = (Number(page) - 1) * Number(limit);
     const take = Number(limit);
 
-    const where = {};
-    if (role && role !== 'ALL') where.role = role;
-    if (department && department !== 'ALL') where.department = department;
+    // Build filter conditions: ADMIN accounts are strictly excluded from Moderator view
+    const conditions = [
+      { role: { not: 'ADMIN' } },
+    ];
+
+    if (role && role !== 'ALL') {
+      if (role !== 'ADMIN') {
+        conditions.push({ role });
+      } else {
+        // If someone explicitly queries for ADMIN, return empty
+        conditions.push({ role: 'NONE' });
+      }
+    }
+
+    if (department && department !== 'ALL') {
+      conditions.push({ department });
+    }
+
     if (search && search.trim()) {
       const q = search.trim();
-      where.OR = [
-        { name: { contains: q } },
-        { email: { contains: q } },
-        { department: { contains: q } },
-      ];
+      conditions.push({
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+          { department: { contains: q, mode: 'insensitive' } },
+        ],
+      });
     }
+
+    const where = { AND: conditions };
 
     const [users, total] = await Promise.all([
       prisma.user.findMany({
@@ -952,9 +1185,12 @@ export async function getDashboardSummary(req, res) {
  */
 export async function getAdminBadgeCounts(req, res) {
   try {
-    const [pendingApprovals, passwordResetRequests] = await Promise.all([
+    const [pendingEnrollmentApprovals, pendingModerators, passwordResetRequests] = await Promise.all([
       prisma.courseEnrollmentRequest.count({
         where: { status: 'FORWARDED_TO_ADMIN' },
+      }),
+      prisma.user.count({
+        where: { status: 'PENDING_APPROVAL', requestedRole: 'MODERATOR' },
       }),
       prisma.user.count({
         where: { passwordResetRequested: true },
@@ -964,7 +1200,9 @@ export async function getAdminBadgeCounts(req, res) {
     return res.status(200).json({
       success: true,
       counts: {
-        pendingApprovals,
+        pendingApprovals: pendingEnrollmentApprovals + pendingModerators,
+        pendingEnrollmentApprovals,
+        pendingModerators,
         passwordResetRequests,
       },
     });
@@ -974,5 +1212,218 @@ export async function getAdminBadgeCounts(req, res) {
       success: false,
       counts: { pendingApprovals: 0, passwordResetRequests: 0 },
     });
+  }
+}
+
+/**
+ * PUT /api/v1/admin/users/:id/moderator-permissions
+ * Configure granular operational permissions for a Moderator and write audit trail
+ */
+export async function updateModeratorPermissions(req, res) {
+  try {
+    const { id } = req.params;
+    const { permissions, activate = true } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'User not found.' });
+    }
+
+    let oldPerms = {};
+    if (user.moderatorPermissions) {
+      try {
+        oldPerms = typeof user.moderatorPermissions === 'string'
+          ? JSON.parse(user.moderatorPermissions)
+          : user.moderatorPermissions;
+      } catch {
+        oldPerms = {};
+      }
+    }
+
+    const newPerms = permissions || {};
+
+    const allModules = ['users', 'courses', 'enrollments', 'assessments', 'transfers', 'messages', 'auditLogs'];
+    const actionsMap = {
+      users: ['view', 'manage'],
+      courses: ['view', 'manage'],
+      enrollments: ['view', 'manage', 'approve'],
+      assessments: ['view', 'manage'],
+      transfers: ['view', 'manage', 'approve'],
+      messages: ['view', 'manage'],
+      auditLogs: ['view'],
+    };
+
+    const changes = [];
+    for (const mod of allModules) {
+      const actions = actionsMap[mod] || ['view', 'manage'];
+      for (const act of actions) {
+        const prevVal = Boolean(oldPerms[mod]?.[act]);
+        const nextVal = Boolean(newPerms[mod]?.[act]);
+        if (prevVal !== nextVal) {
+          changes.push({
+            module: mod,
+            action: act,
+            previous: prevVal,
+            current: nextVal,
+            summary: `${mod.charAt(0).toUpperCase() + mod.slice(1)} → ${act.charAt(0).toUpperCase() + act.slice(1)}: ${nextVal ? 'Granted' : 'Revoked'}`,
+          });
+        }
+      }
+    }
+
+    const updateData = {
+      role: 'MODERATOR',
+      moderatorPermissions: JSON.stringify(newPerms),
+    };
+
+    if (activate) {
+      updateData.status = 'ACTIVE';
+      updateData.requestedRole = null;
+      updateData.failedLoginAttempts = 0;
+      updateData.lockUntil = null;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: updateData,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        status: true,
+        department: true,
+        moderatorPermissions: true,
+        requestedRole: true,
+        updatedAt: true,
+      },
+    });
+
+    if (changes.length > 0) {
+      for (const ch of changes) {
+        await prisma.auditLog.create({
+          data: {
+            actorId: req.user.id,
+            actorEmail: req.user.email,
+            actorName: req.user.name,
+            action: 'MODERATOR_PERMISSION_CHANGED',
+            resource: `Moderator: ${user.email}`,
+            details: JSON.stringify({
+              userId: user.id,
+              module: ch.module,
+              actionType: ch.action,
+              previous: ch.previous,
+              current: ch.current,
+              summary: ch.summary,
+            }),
+            riskLevel: 'MEDIUM',
+          },
+        });
+      }
+    } else {
+      await prisma.auditLog.create({
+        data: {
+          actorId: req.user.id,
+          actorEmail: req.user.email,
+          actorName: req.user.name,
+          action: 'MODERATOR_PERMISSION_CHANGED',
+          resource: `Moderator: ${user.email}`,
+          details: JSON.stringify({
+            userId: user.id,
+            summary: 'Moderator operational permissions initialized and confirmed.',
+          }),
+          riskLevel: 'LOW',
+        },
+      });
+    }
+
+    try {
+      await prisma.notification.create({
+        data: {
+          recipientId: user.id,
+          title: '🛡️ Moderator Permissions Configured',
+          message: 'An administrator has updated your operational permissions.',
+          type: 'SYSTEM',
+        },
+      });
+      if (io) {
+        io.to(`user_${user.id}`).emit('system_notification', {
+          title: '🛡️ Moderator Permissions Configured',
+          message: 'An administrator has updated your operational permissions.',
+          type: 'SYSTEM',
+        });
+        io.to(`user_${user.id}`).emit('user_role_updated', {
+          role: 'MODERATOR',
+          status: 'ACTIVE',
+        });
+        io.to('role_ADMIN').emit('admin_request_resolved', { userId: user.id });
+      }
+    } catch (notifErr) {
+      logger.warn(`Could not dispatch permission notification: ${notifErr.message}`);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Moderator permissions updated and applied successfully.',
+      user: {
+        ...updatedUser,
+        moderatorPermissions: newPerms,
+      },
+      changesCount: changes.length,
+    });
+  } catch (error) {
+    logger.error(`Update Moderator Permissions Error: ${error.message}`);
+    return res.status(500).json({ success: false, error: 'UPDATE_FAILED', message: error.message });
+  }
+}
+
+/**
+ * GET /api/v1/admin/users/:id/moderator-permissions/history
+ * Fetch audit trail of permission changes for a specific Moderator
+ */
+export async function getModeratorPermissionHistory(req, res) {
+  try {
+    const { id } = req.params;
+    const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true } });
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'User not found.' });
+    }
+
+    const logs = await prisma.auditLog.findMany({
+      where: {
+        action: 'MODERATOR_PERMISSION_CHANGED',
+        resource: { contains: user.email },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+
+    const history = logs.map((l) => {
+      let parsedDetails = {};
+      try {
+        parsedDetails = JSON.parse(l.details);
+      } catch {
+        parsedDetails = { summary: l.details };
+      }
+      return {
+        id: l.id,
+        actorName: l.actorName || 'System Administrator',
+        actorEmail: l.actorEmail,
+        summary: parsedDetails.summary || 'Permission modified',
+        module: parsedDetails.module,
+        actionType: parsedDetails.actionType,
+        previous: parsedDetails.previous,
+        current: parsedDetails.current,
+        createdAt: l.createdAt,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      history,
+    });
+  } catch (error) {
+    logger.error(`Get Moderator Permission History Error: ${error.message}`);
+    return res.status(500).json({ success: false, error: 'FETCH_FAILED', message: error.message });
   }
 }

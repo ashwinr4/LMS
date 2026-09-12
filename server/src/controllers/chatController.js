@@ -140,16 +140,46 @@ export async function getMessages(req, res) {
 }
 
 /**
+ * POST /api/v1/chat/upload
+ * Upload document or media attachment for chat
+ */
+export async function uploadChatFile(req, res) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'NO_FILE', message: 'No file uploaded.' });
+    }
+    const fileUrl = `/uploads/chat/${req.file.filename}`;
+    return res.status(200).json({
+      success: true,
+      file: {
+        fileUrl,
+        fileName: req.file.originalname,
+        fileType: req.file.mimetype,
+        fileSize: req.file.size,
+      },
+    });
+  } catch (error) {
+    logger.error(`Chat File Upload Error: ${error.message}`);
+    return res.status(500).json({ success: false, error: 'UPLOAD_FAILED', message: error.message });
+  }
+}
+
+/**
  * POST /api/v1/chat/messages
  * Send message to ANNOUNCEMENT (Admin only), COMMUNITY, or DIRECT
  */
 export async function postMessage(req, res) {
   try {
-    const { type, content, recipientId } = req.body;
+    const { type, content, recipientId, fileUrl, fileName, fileType, fileSize } = req.body;
     const user = req.user;
 
-    if (!content || !content.trim()) {
-      return res.status(400).json({ success: false, error: 'EMPTY_CONTENT', message: 'Message content is required.' });
+    const trimmedContent = content?.trim() || '';
+    if (!trimmedContent && !fileUrl) {
+      return res.status(400).json({
+        success: false,
+        error: 'EMPTY_CONTENT',
+        message: 'Message content or file attachment is required.',
+      });
     }
 
     if (type === 'ANNOUNCEMENT' && user.role !== 'ADMIN') {
@@ -174,7 +204,7 @@ export async function postMessage(req, res) {
       }
     }
 
-    const sanitizedContent = xss(content.trim());
+    const sanitizedContent = trimmedContent ? xss(trimmedContent) : (fileName || 'Attachment');
 
     const message = await prisma.chatMessage.create({
       data: {
@@ -187,6 +217,10 @@ export async function postMessage(req, res) {
         recipientName: targetUser?.name || null,
         recipientRole: targetUser?.role || null,
         content: sanitizedContent,
+        fileUrl: fileUrl || null,
+        fileName: fileName || null,
+        fileType: fileType || null,
+        fileSize: fileSize ? Number(fileSize) : null,
       },
     });
 
@@ -199,6 +233,8 @@ export async function postMessage(req, res) {
       } else if (type === 'DIRECT') {
         // Send to recipient's private user room
         io.to(`user_${recipientId}`).emit('new_direct_message', message);
+        // Send to sender's private user room as well (for multi-tab / other active devices)
+        io.to(`user_${user.id}`).emit('new_direct_message', message);
         // Send to Admin audit room for real-time compliance oversight
         io.to('role_ADMIN').emit('admin_message_audit', message);
       }
@@ -224,9 +260,17 @@ export async function getContacts(req, res) {
   try {
     const user = req.user;
     
-    // Any active user can message any other active member on the platform
+    // Filter contacts: Non-admins cannot see administrator accounts
+    const contactWhere = {
+      id: { not: user.id },
+      status: 'ACTIVE',
+    };
+    if (user.role !== 'ADMIN') {
+      contactWhere.role = { not: 'ADMIN' };
+    }
+
     const contacts = await prisma.user.findMany({
-      where: { id: { not: user.id }, status: 'ACTIVE' },
+      where: contactWhere,
       select: { id: true, name: true, role: true, department: true, avatar: true },
       orderBy: [{ role: 'asc' }, { name: 'asc' }],
       take: 100,

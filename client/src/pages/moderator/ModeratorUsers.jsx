@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api.js';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
@@ -10,9 +11,13 @@ import {
   Building2,
   Calendar,
   AlertCircle,
+  ChevronRight,
 } from 'lucide-react';
+import { CustomDropdown } from '../../components/ui/CustomDropdown.jsx';
+import { Avatar } from '../../components/ui/Avatar.jsx';
 
 export default function ModeratorUsers() {
+  const navigate = useNavigate();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -71,20 +76,22 @@ export default function ModeratorUsers() {
           </Button>
         </form>
 
-        <div className="flex flex-wrap items-center gap-1.5 self-start md:self-auto text-xs">
-          {['ALL', 'USER', 'COURSE_CREATOR', 'MODERATOR', 'ADMIN'].map((r) => (
-            <button
-              key={r}
-              onClick={() => setSelectedRole(r)}
-              className={`px-3 py-1.5 rounded-btn font-semibold transition-all ${
-                selectedRole === r
-                  ? 'bg-brand-500 text-white shadow-sm'
-                  : 'bg-surface-tertiary dark:bg-dark-elevated text-app-secondary hover:text-app'
-              }`}
-            >
-              {r === 'ALL' ? 'All Roles' : r === 'COURSE_CREATOR' ? 'Creator' : r}
-            </button>
-          ))}
+        {/* Role Custom Dropdown Filter */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="role-filter" className="text-xs font-semibold text-app-secondary">
+            Role:
+          </label>
+          <CustomDropdown
+            id="role-filter"
+            value={selectedRole}
+            onChange={setSelectedRole}
+            options={[
+              { value: 'ALL', label: 'All Roles' },
+              { value: 'COURSE_CREATOR', label: 'Course Creator' },
+              { value: 'MODERATOR', label: 'Moderator' },
+              { value: 'USER', label: 'User / Learner' },
+            ]}
+          />
         </div>
       </div>
 
@@ -100,7 +107,7 @@ export default function ModeratorUsers() {
           <div className="p-8 text-center bg-red-500/10 border border-red-500/30 rounded-card text-xs text-red-600 font-semibold">
             {error}
           </div>
-        ) : users.length === 0 ? (
+        ) : users.filter((u) => u.role !== 'ADMIN').length === 0 ? (
           <div className="p-12 text-center space-y-3">
             <Users className="h-10 w-10 text-app-muted mx-auto" />
             <h4 className="text-sm font-bold text-app">No Users Found</h4>
@@ -117,28 +124,44 @@ export default function ModeratorUsers() {
                   <th className="py-3 px-4 text-right">Registered</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-app">
-                {users.map((u) => (
-                  <tr key={u.id} className="hover:bg-surface-tertiary/30 transition-colors">
+              <tbody>
+                {users
+                  .filter((u) => u.role !== 'ADMIN')
+                  .map((u) => (
+                  <tr
+                    key={u.id}
+                    onClick={() => navigate(`/moderator/users/${u.id}`)}
+                    className="table-row-inset-divider hover:bg-surface-tertiary/40 dark:hover:bg-dark-elevated/40 cursor-pointer transition-colors group"
+                  >
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-brand-500/10 border border-brand-500/20 text-brand-600 dark:text-brand-400 flex items-center justify-center font-bold text-xs shrink-0">
-                          {u.name?.charAt(0)}
-                        </div>
+                        <Avatar
+                          src={u.avatar}
+                          name={u.name}
+                          size="sm"
+                        />
                         <div>
-                          <p className="font-bold text-app">{u.name}</p>
+                          <p className="font-bold text-app group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
+                            {u.name}
+                          </p>
                           <p className="text-app-secondary font-mono text-[11px]">{u.email}</p>
                         </div>
                       </div>
                     </td>
 
                     <td className="py-3 px-4">
-                      <p className="font-medium text-app">{u.department || 'General'}</p>
-                      <p className="text-[10px] text-app-secondary">{u.location || 'Remote'}</p>
+                      {u.role === 'USER' ? (
+                        <span className="text-app-muted italic text-[11px]">Learner</span>
+                      ) : (
+                        <>
+                          <p className="font-medium text-app">{u.department || 'General'}</p>
+                          <p className="text-[10px] text-app-secondary">{u.location || 'Remote'}</p>
+                        </>
+                      )}
                     </td>
 
                     <td className="py-3 px-4 font-mono font-bold">
-                      <span className="bg-surface-tertiary px-2 py-0.5 rounded text-[10px] text-app-secondary">
+                      <span className="bg-elevated px-2 py-0.5 rounded text-[10px] text-app-secondary border border-app">
                         {u.role}
                       </span>
                     </td>

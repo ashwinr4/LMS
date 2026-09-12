@@ -94,6 +94,9 @@ export async function register(req, res) {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
+    const isModeratorRequest = role === 'MODERATOR';
+    const initialStatus = isModeratorRequest ? 'PENDING_APPROVAL' : 'ACTIVE';
+
     const newUser = await prisma.user.create({
       data: {
         name,
@@ -101,7 +104,8 @@ export async function register(req, res) {
         passwordHash,
         department: department || 'General',
         role: role || 'USER',
-        status: 'ACTIVE',
+        status: initialStatus,
+        requestedRole: isModeratorRequest ? 'MODERATOR' : null,
       },
       select: {
         id: true,
@@ -111,6 +115,7 @@ export async function register(req, res) {
         status: true,
         department: true,
         avatar: true,
+        requestedRole: true,
         createdAt: true,
       },
     });
@@ -122,11 +127,48 @@ export async function register(req, res) {
         actorName: newUser.name,
         action: 'USER_REGISTERED',
         resource: 'USER',
-        details: `User registered with role ${newUser.role}`,
+        details: isModeratorRequest
+          ? 'User registered requesting Moderator role. Awaiting Administrator verification and permission setup.'
+          : `User registered with role ${newUser.role}`,
         ipAddress: req.ip,
         riskLevel: 'LOW',
       },
     });
+
+    if (isModeratorRequest) {
+      try {
+        await prisma.notification.create({
+          data: {
+            targetRole: 'ADMIN',
+            title: '🛡️ Moderator Role Request',
+            message: `${newUser.name} (${newUser.email}) requested Moderator privileges. Administrator verification and permission setup is required.`,
+            type: 'SYSTEM',
+            link: '/admin/approvals?tab=moderators',
+          },
+        });
+        if (io) {
+          io.to('role_ADMIN').emit('system_notification', {
+            title: '🛡️ Moderator Role Request',
+            message: `${newUser.name} requested Moderator access.`,
+            type: 'SYSTEM',
+            link: '/admin/approvals?tab=moderators',
+          });
+          io.to('role_ADMIN').emit('admin_new_request', {
+            title: 'Moderator Request',
+            user: newUser,
+          });
+        }
+      } catch (notifErr) {
+        logger.warn(`Moderator request notification error: ${notifErr.message}`);
+      }
+
+      return res.status(201).json({
+        success: true,
+        pendingApproval: true,
+        message: 'Your account has been registered. Moderator privileges require administrator verification and permission assignment before activation.',
+        user: newUser,
+      });
+    }
 
     const accessToken = generateAccessToken(newUser);
     const refreshToken = generateRefreshToken(newUser);
@@ -221,6 +263,14 @@ export async function login(req, res) {
       });
     }
 
+    if (user.status === 'PENDING_APPROVAL') {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCOUNT_PENDING_APPROVAL',
+        message: 'Your account is pending administrator verification and operational permission provisioning. You will be notified once active.',
+      });
+    }
+
     const passwordMatch = await bcrypt.compare(password, user.passwordHash);
 
     if (!passwordMatch) {
@@ -258,6 +308,15 @@ export async function login(req, res) {
         });
       }
 
+      if (user.mustChangePassword) {
+        return res.status(401).json({
+          success: false,
+          error: 'TEMPORARY_PASSWORD_REQUIRED',
+          isTemporaryPasswordNotice: true,
+          message: 'An administrator has reset your credentials. A new temporary password was dispatched to your email address. Please check your inbox and use the temporary password to sign in.',
+        });
+      }
+
       return res.status(401).json({
         success: false,
         error: 'INVALID_CREDENTIALS',
@@ -290,7 +349,10 @@ export async function login(req, res) {
       success: true,
       requiresOtp: true,
       email: user.email,
-      message: `A 6-digit verification code has been dispatched to ${user.email}.`,
+      mustChangePassword: Boolean(user.mustChangePassword),
+      message: user.mustChangePassword
+        ? `Temporary credentials detected. A 6-digit verification code has been dispatched to ${user.email}.`
+        : `A 6-digit verification code has been dispatched to ${user.email}.`,
     });
   } catch (error) {
     logger.error(`Login Controller Error: ${error.message}`, { stack: error.stack });
@@ -359,6 +421,20 @@ export async function demoLogin(req, res) {
       phone: user.phone,
       location: user.location,
       avatar: user.avatar,
+      requestedRole: user.requestedRole,
+      moderatorPermissions: user.moderatorPermissions
+        ? typeof user.moderatorPermissions === 'string'
+          ? JSON.parse(user.moderatorPermissions)
+          : user.moderatorPermissions
+        : user.role === 'MODERATOR'
+        ? {
+            courses: { view: true, manage: true },
+            enrollments: { view: true, manage: true, approve: true },
+            transfers: { view: true, approve: true },
+            messages: { view: true, manage: true },
+            auditLogs: { view: true },
+          }
+        : null,
     };
 
     logger.info(`Demo Login activated for: ${safeUser.email} (${safeUser.role})`);
@@ -528,6 +604,8 @@ export async function getMe(req, res) {
         location: true,
         avatar: true,
         mustChangePassword: true,
+        requestedRole: true,
+        moderatorPermissions: true,
         lastActive: true,
         createdAt: true,
       },
@@ -541,9 +619,23 @@ export async function getMe(req, res) {
       });
     }
 
+    let parsedPerms = null;
+    if (user.moderatorPermissions) {
+      try {
+        parsedPerms = typeof user.moderatorPermissions === 'string'
+          ? JSON.parse(user.moderatorPermissions)
+          : user.moderatorPermissions;
+      } catch {
+        parsedPerms = null;
+      }
+    }
+
     return res.status(200).json({
       success: true,
-      user,
+      user: {
+        ...user,
+        moderatorPermissions: parsedPerms,
+      },
     });
   } catch (error) {
     logger.error(`GetMe Controller Error: ${error.message}`);
@@ -755,20 +847,34 @@ export async function verifyOtp(req, res) {
       logger.warn(`AuditLog creation note: ${auditErr.message}`);
     }
 
-    return res.status(200).json({
-      success: true,
-      message: '2FA verification successful.',
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        status: user.status,
-        department: user.department,
-        avatar: user.avatar,
-      },
-      accessToken,
-    });
+      let parsedPerms = null;
+      if (user.moderatorPermissions) {
+        try {
+          parsedPerms = typeof user.moderatorPermissions === 'string'
+            ? JSON.parse(user.moderatorPermissions)
+            : user.moderatorPermissions;
+        } catch {
+          parsedPerms = null;
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: '2FA verification successful.',
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          status: user.status,
+          department: user.department,
+          avatar: user.avatar,
+          mustChangePassword: Boolean(user.mustChangePassword),
+          requestedRole: user.requestedRole,
+          moderatorPermissions: parsedPerms,
+        },
+        accessToken,
+      });
   } catch (error) {
     logger.error(`Verify OTP Error: ${error.message}`, { stack: error.stack });
     return res.status(500).json({
@@ -1045,5 +1151,62 @@ export async function requestPasswordReset(req, res) {
   } catch (error) {
     logger.error(`Request Password Reset Error: ${error.message}`);
     return res.status(500).json({ success: false, message: 'Failed to process reset request.' });
+  }
+}
+
+/**
+ * POST /api/v1/auth/change-password
+ * Authenticated user sets new permanent password, clearing mustChangePassword flag
+ */
+export async function changePassword(req, res) {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.trim().length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long.',
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword.trim(), 12);
+    const updated = await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        passwordHash,
+        mustChangePassword: false,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        status: true,
+        department: true,
+        avatar: true,
+        mustChangePassword: true,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        actorName: req.user.name,
+        action: 'USER_PASSWORD_CHANGED',
+        resource: 'AUTH',
+        details: 'User established permanent credentials.',
+        ipAddress: req.ip || '127.0.0.1',
+        riskLevel: 'LOW',
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Your permanent password has been established successfully.',
+      user: updated,
+    });
+  } catch (error) {
+    logger.error(`Change Password Error: ${error.message}`);
+    return res.status(500).json({ success: false, message: 'Failed to establish new password.' });
   }
 }
