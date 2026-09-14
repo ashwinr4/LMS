@@ -118,3 +118,54 @@ Implement a universal **Profile Page** for all users, an **Admin-Only Settings P
    - Direct navigation as non-admin -> Verify immediate redirect/access denial.
    - As Admin: Test a valid and invalid connection string with the "Test Connection" button.
    - Update database settings -> Verify connection pool updates and audit log entry is recorded.
+
+---
+
+## Enhancement Plan: Test-Before-Activate Gating & Session Persistence Rectification
+
+### 1. Mandatory "Test Before Activate" Gate & "Safe to Transfer" Badge
+
+#### Core Objective:
+Prevent accidental activation of untested or unreachable database configurations. The Admin must verify connection integrity before activating any database card.
+
+#### Detailed Workflow & UI Specifications:
+1. **Default Locked/Disabled State**:
+   - For all standby database cards, both the **"Activate"** button and the **sliding toggle switch** are disabled by default (`disabled={!isTestPassed || isUrlEmpty}`).
+   - Visual hint/tooltip on disabled button/toggle: *"Run connection test first to verify database reachability and permissions."*
+
+2. **Pre-Flight Diagnostic Execution ("Test" Button)**:
+   - Admin inputs or keeps a valid connection URL and clicks **"Test"**.
+   - Test performs a lightweight protocol ping (credential check, TLS handshake, cluster health query, latency measurement) without modifying any data.
+
+3. **Success State ("Diagnostics Passed" + "Safe to Transfer")**:
+   - Upon successful diagnostic ping (`testResult.success === true`):
+     - Displays **`Diagnostics Passed`** chip with real-time latency (e.g. `660ms`) and engine version (e.g. `MongoDB v8.0.32 • test`).
+     - Directly beneath the diagnostics pill, displays a prominent, verified badge:
+       **`✓ Safe to Transfer`** (`bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-bold text-xs flex items-center gap-1.5`).
+     - The **"Activate"** button and the **sliding toggle switch** instantly become unlocked, active, and fully clickable.
+
+4. **URL Mutation Protection (Security Invalidation)**:
+   - If the Admin edits or types into the Connection URL field after testing, the verified state is immediately invalidated (`setTestResults` resets for that card).
+   - The card reverts to locked state, removing "Safe to Transfer" until the new connection string is tested and confirmed.
+
+---
+
+### 2. Session Auto-Logout Diagnosis & Permanent Rectification Plan
+
+#### Root Cause Diagnosis:
+1. **Ultra-Short 15-Minute JWT Expiry**:
+   - In `server/src/controllers/authController.js`, access tokens expire in `15m` (`ACCESS_TOKEN_EXPIRES = '15m'`).
+2. **Concurrent Request Race on Single-Use Token Rotation**:
+   - When the 15 minutes expire, multiple admin dashboard components simultaneously send API queries (settings, telemetry, audit logs).
+   - The first request triggers `/api/v1/auth/refresh`, which rotates and revokes the one-time refresh token cookie.
+   - The parallel requests arrive with the old cookie, triggering `SESSION_EXPIRED_OR_REVOKED` (401), which wipes the session and ejects the admin to `/login`.
+3. **Per-Tab `sessionStorage` Volatility**:
+   - Auth state is stored in `sessionStorage` instead of persistent storage, causing disconnects on tab management.
+
+#### Rectification Plan:
+1. **Extend Admin Access Token Lifetime**:
+   - Increase `ACCESS_TOKEN_EXPIRES` in `authController.js` to **`4h`** or **`12h`** for active sessions so administrative operations are never disrupted.
+2. **Atomic Refresh Token Promise Queue**:
+   - In `client/src/services/api.js`, enforce a robust request queue (`isRefreshing` promise locking) so all concurrent 401 requests await a single shared refresh promise instead of dispatching duplicate rotation requests.
+3. **Persistent Local Authentication Storage**:
+   - Migrate authentication state from `sessionStorage` to `localStorage` in `AuthContext.jsx` and `api.js` with cross-tab synchronization so page reloads, tab navigation, and long admin tasks remain logged in seamlessly.

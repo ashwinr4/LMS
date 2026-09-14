@@ -3,49 +3,87 @@ import { api } from '../services/api.js';
 
 const AuthContext = createContext(null);
 
+function getStoredUser() {
+  try {
+    const stored = localStorage.getItem('esmms_user') || sessionStorage.getItem('esmms_user');
+    return stored ? JSON.parse(stored) : null;
+  } catch {
+    return null;
+  }
+}
+
+function getStoredToken() {
+  try {
+    return localStorage.getItem('esmms_access_token') || sessionStorage.getItem('esmms_access_token') || null;
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
-    try {
-      const stored = sessionStorage.getItem('esmms_user');
-      return stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
-  });
-
-  const [accessToken, setAccessToken] = useState(() => {
-    return sessionStorage.getItem('esmms_access_token') || null;
-  });
-
+  const [user, setUser] = useState(getStoredUser);
+  const [accessToken, setAccessToken] = useState(getStoredToken);
   const [loading, setLoading] = useState(true);
 
   const saveAuth = useCallback((userData, token) => {
     setUser(userData);
     setAccessToken(token);
-    sessionStorage.setItem('esmms_user', JSON.stringify(userData));
-    sessionStorage.setItem('esmms_access_token', token);
+    try {
+      localStorage.setItem('esmms_user', JSON.stringify(userData));
+      localStorage.setItem('esmms_access_token', token);
+      sessionStorage.setItem('esmms_user', JSON.stringify(userData));
+      sessionStorage.setItem('esmms_access_token', token);
+    } catch {}
     api.defaults.headers.common.Authorization = `Bearer ${token}`;
   }, []);
 
   const clearAuth = useCallback(() => {
     setUser(null);
     setAccessToken(null);
-    sessionStorage.removeItem('esmms_user');
-    sessionStorage.removeItem('esmms_access_token');
+    try {
+      localStorage.removeItem('esmms_user');
+      localStorage.removeItem('esmms_access_token');
+      sessionStorage.removeItem('esmms_user');
+      sessionStorage.removeItem('esmms_access_token');
+    } catch {}
     delete api.defaults.headers.common.Authorization;
+  }, []);
+
+  // Sync session across multiple browser tabs
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e.key === 'esmms_user') {
+        try {
+          setUser(e.newValue ? JSON.parse(e.newValue) : null);
+        } catch {}
+      }
+      if (e.key === 'esmms_access_token') {
+        setAccessToken(e.newValue || null);
+        if (e.newValue) {
+          api.defaults.headers.common.Authorization = `Bearer ${e.newValue}`;
+        } else {
+          delete api.defaults.headers.common.Authorization;
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
   // Check current session on initial mount
   useEffect(() => {
     async function initAuth() {
-      const token = sessionStorage.getItem('esmms_access_token');
+      const token = getStoredToken();
       if (token) {
         try {
           api.defaults.headers.common.Authorization = `Bearer ${token}`;
           const { data } = await api.get('/auth/me');
           if (data.user) {
             setUser(data.user);
-            sessionStorage.setItem('esmms_user', JSON.stringify(data.user));
+            try {
+              localStorage.setItem('esmms_user', JSON.stringify(data.user));
+              sessionStorage.setItem('esmms_user', JSON.stringify(data.user));
+            } catch {}
           } else {
             clearAuth();
           }
@@ -130,7 +168,10 @@ export function AuthProvider({ children }) {
   const updateUser = useCallback((updatedUserData) => {
     setUser((prev) => {
       const merged = { ...prev, ...updatedUserData };
-      sessionStorage.setItem('esmms_user', JSON.stringify(merged));
+      try {
+        localStorage.setItem('esmms_user', JSON.stringify(merged));
+        sessionStorage.setItem('esmms_user', JSON.stringify(merged));
+      } catch {}
       return merged;
     });
   }, []);

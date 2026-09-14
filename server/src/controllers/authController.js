@@ -9,7 +9,7 @@ import { io } from '../server.js';
 
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'esmms_super_secure_access_token_secret_key_2026_x89';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'esmms_super_secure_refresh_token_secret_key_2026_y90';
-const ACCESS_TOKEN_EXPIRES = '15m';
+const ACCESS_TOKEN_EXPIRES = '8h';
 const REFRESH_TOKEN_EXPIRES_DAYS = 7;
 
 function generateAccessToken(user) {

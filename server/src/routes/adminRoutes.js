@@ -52,6 +52,7 @@ import {
   getDatabaseSettings,
   testDatabaseConnection,
   updateDatabaseSettings,
+  migrateAndActivateDatabase,
 } from '../controllers/adminSettingsController.js';
 
 // ── Security Audit Logs Hub ──
@@ -61,5 +62,6 @@ router.get('/audit-logs', listAuditLogs);
 router.get('/settings/database', getDatabaseSettings);
 router.post('/settings/database/test', testDatabaseConnection);
 router.put('/settings/database', updateDatabaseSettings);
+router.post('/settings/database/migrate-and-activate', migrateAndActivateDatabase);
 
 export default router;
