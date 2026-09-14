@@ -1,7 +1,12 @@
 import axios from 'axios';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
+  : '/api/v1';
+
 export const api = axios.create({
-  baseURL: '/api/v1',
+  baseURL: API_BASE_URL,
+  timeout: 25000,
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
@@ -83,7 +88,8 @@ api.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const { data } = await axios.post('/api/v1/auth/refresh', {}, { withCredentials: true });
+        const refreshUrl = `${API_BASE_URL}/auth/refresh`;
+        const { data } = await axios.post(refreshUrl, {}, { withCredentials: true });
         if (data.accessToken) {
           setStoredToken(data.accessToken);
           api.defaults.headers.common.Authorization = `Bearer ${data.accessToken}`;

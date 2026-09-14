@@ -44,12 +44,23 @@ function hashToken(token) {
 }
 
 function setRefreshTokenCookie(res, refreshToken) {
+  const isProd = process.env.NODE_ENV === 'production';
   res.cookie('esmms_refresh_token', refreshToken, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
     maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000,
     path: '/',
+  });
+}
+
+function clearRefreshTokenCookie(res) {
+  const isProd = process.env.NODE_ENV === 'production';
+  res.clearCookie('esmms_refresh_token', {
+    path: '/',
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? 'none' : 'lax',
   });
 }
 
@@ -487,7 +498,7 @@ export async function refresh(req, res) {
     });
 
     if (!session || session.isRevoked || new Date(session.expiresAt) < new Date()) {
-      res.clearCookie('esmms_refresh_token', { path: '/' });
+      clearRefreshTokenCookie(res);
       return res.status(401).json({
         success: false,
         error: 'SESSION_EXPIRED_OR_REVOKED',
@@ -557,7 +568,7 @@ export async function logout(req, res) {
       });
     }
 
-    res.clearCookie('esmms_refresh_token', { path: '/' });
+    clearRefreshTokenCookie(res);
 
     if (req.user) {
       await prisma.auditLog.create({

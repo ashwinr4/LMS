@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -12,11 +13,25 @@ import { logger } from './utils/logger.js';
 
 dotenv.config();
 
+// Ensure local uploads directory exists on fresh cloud container deployment
+if (!fs.existsSync('uploads')) {
+  try {
+    fs.mkdirSync('uploads', { recursive: true });
+  } catch {}
+}
+
 const app = express();
+// Enable trust proxy for cloud deployment (Render, Railway, Vercel reverse proxies)
+app.set('trust proxy', 1);
+
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5050;
+
+const rawClientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+const trimmedClientUrl = rawClientUrl.replace(/\/$/, '');
 const ALLOWED_ORIGINS = [
-  process.env.CLIENT_URL || 'http://localhost:5173',
+  trimmedClientUrl,
+  `${trimmedClientUrl}/`,
   'http://localhost:5174',
   'http://localhost:5173',
 ];
@@ -24,7 +39,13 @@ const ALLOWED_ORIGINS = [
 // 1. Socket.io Initialization
 export const io = new SocketIOServer(server, {
   cors: {
-    origin: ALLOWED_ORIGINS,
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.onrender.com') || origin.endsWith('.vercel.app')) {
+        callback(null, true);
+      } else {
+        callback(null, true);
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   },
@@ -63,10 +84,10 @@ app.use(
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.onrender.com') || origin.endsWith('.vercel.app')) {
         callback(null, true);
       } else {
-        callback(null, true); // Dev fallback
+        callback(null, true);
       }
     },
     credentials: true,
@@ -75,6 +96,11 @@ app.use(
     exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length'],
   })
 );
+
+// Cloud Health Check & Keep-Alive Endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', uptime: Math.floor(process.uptime()), timestamp: new Date().toISOString() });
+});
 
 // Serve static uploaded course videos, documents, and media with HTTP Range streaming support
 app.use('/uploads', express.static(path.resolve('uploads'), {
