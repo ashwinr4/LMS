@@ -49,7 +49,6 @@ function setRefreshTokenCookie(res, refreshToken) {
     httpOnly: true,
     secure: isProd,
     sameSite: isProd ? 'none' : 'lax',
-    maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000,
     path: '/',
   });
 }

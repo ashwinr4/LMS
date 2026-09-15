@@ -163,25 +163,29 @@ export default function AdminSettings() {
         const pRaw = data.settings.primary?.rawUrl || '';
         const bRaw = data.settings.secondary?.rawUrl || '';
 
-        const pEng = detectEngine(pRaw);
-        const bEng = detectEngine(bRaw);
+        const pEng = data.settings.primary?.engine || detectEngine(pRaw);
+        const bEng = data.settings.secondary?.engine || detectEngine(bRaw);
 
         setActivePrimaryEngine(pEng !== 'unknown' ? pEng : 'postgresql');
         setActiveBackupEngine(bEng !== 'unknown' ? bEng : 'postgresql');
 
+        const urlsFromApi = data.urls || {};
+
         setEngineUrls((prev) => ({
           primary: {
             ...prev.primary,
-            ...(pEng !== 'unknown' ? { [pEng]: pRaw } : {}),
+            ...urlsFromApi,
+            ...(pEng !== 'unknown' && pRaw ? { [pEng]: pRaw } : {}),
           },
           backup: {
             ...prev.backup,
-            ...(bEng !== 'unknown' ? { [bEng]: bRaw } : {}),
+            ...urlsFromApi,
+            ...(bEng !== 'unknown' && bRaw ? { [bEng]: bRaw } : {}),
           },
         }));
 
         // Set initial test result if already verified
-        if (data.settings.primary?.status === 'ONLINE') {
+        if (data.settings.primary?.status === 'ONLINE' || data.settings.primary?.status === 'SYNCHRONIZED_CLUSTER') {
           setTestResults((prev) => ({
             ...prev,
             [`primary_${pEng}`]: {
@@ -352,6 +356,7 @@ export default function AdminSettings() {
 
       setSuccess(`Successfully activated ${migrationTarget.engineMeta.name} as active ${migrationTarget.role} database!`);
       setTimeout(() => setSuccess(null), 5000);
+      await fetchSettings();
     } catch (err) {
       console.error('Migration failed:', err);
       setMigrationError(err.response?.data?.message || 'Migration pipeline encountered an error. Previous database remains active.');
@@ -514,23 +519,36 @@ export default function AdminSettings() {
                   {testResult && (
                     <div
                       className={cn(
-                        'p-2.5 rounded-btn text-xs space-y-1 border',
+                        'p-2.5 rounded-btn text-xs space-y-1 border transition-colors',
                         testResult.success
-                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20'
+                          ? isActive
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
+                            : 'bg-slate-100 dark:bg-dark-elevated text-slate-700 dark:text-slate-300 border-slate-200 dark:border-dark-border'
                           : 'bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20'
                       )}
                     >
                       <div className="flex items-center justify-between text-[11px] font-semibold">
                         <span className="flex items-center gap-1.5">
                           {testResult.success ? (
-                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <CheckCircle2
+                              className={cn(
+                                'h-3.5 w-3.5 shrink-0',
+                                isActive ? 'text-emerald-500' : 'text-slate-500 dark:text-slate-400'
+                              )}
+                            />
                           ) : (
                             <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />
                           )}
-                          <span>{testResult.success ? 'Diagnostics Passed' : 'Test Failed'}</span>
+                          <span>
+                            {testResult.success
+                              ? isActive
+                                ? 'Live Endpoint Active'
+                                : 'Connection Verified'
+                              : 'Test Failed'}
+                          </span>
                         </span>
                         {testResult.latencyMs && (
-                          <span className="font-mono text-[10px]">{testResult.latencyMs}ms</span>
+                          <span className="font-mono text-[10px] text-app-muted">{testResult.latencyMs}ms</span>
                         )}
                       </div>
                       {testResult.version && (
@@ -546,13 +564,13 @@ export default function AdminSettings() {
                     </div>
                   )}
 
-                  {/* Safe to Transfer Verified Banner */}
+                  {/* Standby Verification Banner (Clean & Neutral) */}
                   {testResult?.success && !isActive && (
-                    <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-btn bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-bold">
-                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-                      <span>Safe to Transfer</span>
-                      <span className="text-[10px] font-normal text-emerald-600/80 dark:text-emerald-400/80 ml-auto">
-                        Ready for Activation
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-btn bg-surface-elevated text-app-secondary border border-app text-[11px] font-medium shadow-2xs">
+                      <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-slate-400" />
+                      <span>Standby Ready</span>
+                      <span className="text-[10px] font-mono text-app-muted ml-auto">
+                        Ready to Activate
                       </span>
                     </div>
                   )}
@@ -585,9 +603,9 @@ export default function AdminSettings() {
                         variant="primary"
                         size="sm"
                         className={cn(
-                          'flex-1 text-xs shadow-xs transition-all',
+                          'flex-1 text-xs shadow-xs font-semibold transition-all',
                           testResult?.success
-                            ? 'bg-brand-600 hover:bg-brand-700 text-white'
+                            ? 'bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900'
                             : 'bg-surface-elevated text-app-muted cursor-not-allowed opacity-60'
                         )}
                         onClick={() => initiateActivation('primary', engine.id)}
@@ -750,23 +768,36 @@ export default function AdminSettings() {
                   {testResult && (
                     <div
                       className={cn(
-                        'p-2.5 rounded-btn text-xs space-y-1 border',
+                        'p-2.5 rounded-btn text-xs space-y-1 border transition-colors',
                         testResult.success
-                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/20'
+                          ? isActive
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
+                            : 'bg-slate-100 dark:bg-dark-elevated text-slate-700 dark:text-slate-300 border-slate-200 dark:border-dark-border'
                           : 'bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20'
                       )}
                     >
                       <div className="flex items-center justify-between text-[11px] font-semibold">
                         <span className="flex items-center gap-1.5">
                           {testResult.success ? (
-                            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <CheckCircle2
+                              className={cn(
+                                'h-3.5 w-3.5 shrink-0',
+                                isActive ? 'text-emerald-500' : 'text-slate-500 dark:text-slate-400'
+                              )}
+                            />
                           ) : (
                             <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />
                           )}
-                          <span>{testResult.success ? 'Endpoint Ready' : 'Test Failed'}</span>
+                          <span>
+                            {testResult.success
+                              ? isActive
+                                ? 'Active Replication'
+                                : 'Connection Verified'
+                              : 'Test Failed'}
+                          </span>
                         </span>
                         {testResult.latencyMs && (
-                          <span className="font-mono text-[10px]">{testResult.latencyMs}ms</span>
+                          <span className="font-mono text-[10px] text-app-muted">{testResult.latencyMs}ms</span>
                         )}
                       </div>
                       {testResult.version && (
@@ -782,12 +813,12 @@ export default function AdminSettings() {
                     </div>
                   )}
 
-                  {/* Safe to Transfer Verified Banner */}
+                  {/* Standby Verification Banner (Clean & Neutral) */}
                   {testResult?.success && !isActive && (
-                    <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-btn bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/20 text-[11px] font-bold">
-                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-teal-500" />
-                      <span>Safe to Transfer</span>
-                      <span className="text-[10px] font-normal text-teal-600/80 dark:text-teal-400/80 ml-auto">
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-btn bg-surface-elevated text-app-secondary border border-app text-[11px] font-medium shadow-2xs">
+                      <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-slate-500 dark:text-slate-400" />
+                      <span>Standby Ready</span>
+                      <span className="text-[10px] font-mono text-app-muted ml-auto">
                         Ready for Backup
                       </span>
                     </div>
@@ -821,9 +852,9 @@ export default function AdminSettings() {
                         variant="primary"
                         size="sm"
                         className={cn(
-                          'flex-1 text-xs shadow-xs transition-all',
+                          'flex-1 text-xs shadow-xs font-semibold transition-all',
                           testResult?.success
-                            ? 'bg-teal-600 hover:bg-teal-700 text-white'
+                            ? 'bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900'
                             : 'bg-surface-elevated text-app-muted cursor-not-allowed opacity-60'
                         )}
                         onClick={() => initiateActivation('backup', engine.id)}

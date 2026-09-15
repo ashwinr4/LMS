@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { ROUTES } from '../../routes/routeMap.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
@@ -25,9 +26,9 @@ export default function Landing() {
 
   const getRoleDashboardPath = () => {
     if (!user) return '/courses';
-    if (user.role === 'ADMIN') return '/admin';
-    if (user.role === 'COURSE_CREATOR') return '/creator';
-    if (user.role === 'MODERATOR') return '/moderator';
+    if (user.role === 'ADMIN') return ROUTES.ADMIN_DASHBOARD;
+    if (user.role === 'COURSE_CREATOR') return ROUTES.CREATOR_DASHBOARD;
+    if (user.role === 'MODERATOR') return ROUTES.MODERATOR_DASHBOARD;
     return '/courses';
   };
 

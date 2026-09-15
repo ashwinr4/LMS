@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import * as XLSX from 'xlsx';
 import crypto from 'crypto';
 import { io } from '../server.js';
+import { cache } from '../utils/cache.js';
 
 // ═══════════════════════════════════════════════════════════════════
 // 1. ADMIN USER DIRECTORY & LIFECYCLE
@@ -154,6 +155,7 @@ export async function createUser(req, res) {
     });
 
     logger.info(`Admin ${req.user.email} created user: ${user.email} (${user.role})`);
+    cache.invalidatePrefix('admin:');
     return res.status(201).json({ success: true, message: 'User created successfully.', user });
   } catch (error) {
     logger.error(`Admin Create User Error: ${error.message}`);
@@ -358,6 +360,7 @@ export async function updateUserDetail(req, res) {
       },
     });
 
+    cache.invalidatePrefix('admin:');
     return res.status(200).json({
       success: true,
       message: 'User details updated successfully.',
@@ -421,6 +424,7 @@ export async function updateUserStatus(req, res) {
     }
 
     logger.info(`Admin ${req.user.email} changed user ${user.email} status to ${status}`);
+    cache.invalidatePrefix('admin:');
     return res.status(200).json({ success: true, message: `User status updated to ${status}.`, user });
   } catch (error) {
     logger.error(`Admin Update Status Error: ${error.message}`);
@@ -487,6 +491,7 @@ export async function updateUserRole(req, res) {
       logger.warn(`Failed to create role update notification: ${notifErr.message}`);
     }
 
+    cache.invalidatePrefix('admin:');
     return res.status(200).json({ success: true, message: `User role updated to ${role}.`, user });
   } catch (error) {
     logger.error(`Admin Update Role Error: ${error.message}`);
@@ -556,6 +561,7 @@ export async function resetUserPassword(req, res) {
     // Dispatch live email to user with new temporary password
     await sendPasswordResetEmail(user.email, tempPass, user.name);
 
+    cache.invalidatePrefix('admin:');
     return res.status(200).json({
       success: true,
       message: `Password reset successfully for ${user.email}. Temporary credentials emailed.`,
@@ -729,6 +735,7 @@ export async function bulkImportUsers(req, res) {
     });
 
     logger.info(`Admin ${req.user.email} executed bulk import: ${createdUsers.length} users created.`);
+    cache.invalidatePrefix('admin:');
     return res.status(201).json({
       success: true,
       mode: 'EXECUTE',
@@ -866,6 +873,8 @@ export async function updateCourseStatus(req, res) {
       },
     });
 
+    cache.invalidatePrefix('admin:');
+    cache.invalidatePrefix('modules:');
     return res.status(200).json({ success: true, message: 'Course lifecycle updated.', module: updated });
   } catch (error) {
     logger.error(`Admin Update Course Error: ${error.message}`);
@@ -1118,6 +1127,11 @@ export async function listModeratorCourses(req, res) {
  */
 export async function getDashboardSummary(req, res) {
   try {
+    const cached = cache.get('admin:dashboard-summary');
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
@@ -1161,7 +1175,7 @@ export async function getDashboardSummary(req, res) {
       }),
     ]);
 
-    return res.status(200).json({
+    const payload = {
       success: true,
       stats: {
         totalUsers,
@@ -1172,7 +1186,10 @@ export async function getDashboardSummary(req, res) {
       },
       recentApprovals: recentPendingApprovals,
       recentActivity: recentActivityLogs,
-    });
+    };
+
+    cache.set('admin:dashboard-summary', payload, 15);
+    return res.status(200).json(payload);
   } catch (error) {
     logger.error(`Admin Dashboard Summary Error: ${error.message}`);
     return res.status(500).json({ success: false, error: 'FETCH_FAILED', message: error.message });
@@ -1185,6 +1202,11 @@ export async function getDashboardSummary(req, res) {
  */
 export async function getAdminBadgeCounts(req, res) {
   try {
+    const cached = cache.get('admin:badge-counts');
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+
     const [pendingEnrollmentApprovals, pendingModerators, passwordResetRequests] = await Promise.all([
       prisma.courseEnrollmentRequest.count({
         where: { status: 'FORWARDED_TO_ADMIN' },
@@ -1197,7 +1219,7 @@ export async function getAdminBadgeCounts(req, res) {
       }),
     ]);
 
-    return res.status(200).json({
+    const payload = {
       success: true,
       counts: {
         pendingApprovals: pendingEnrollmentApprovals + pendingModerators,
@@ -1205,7 +1227,10 @@ export async function getAdminBadgeCounts(req, res) {
         pendingModerators,
         passwordResetRequests,
       },
-    });
+    };
+
+    cache.set('admin:badge-counts', payload, 10);
+    return res.status(200).json(payload);
   } catch (error) {
     logger.error(`Get Admin Badge Counts Error: ${error.message}`);
     return res.status(500).json({

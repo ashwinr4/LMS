@@ -1,23 +1,15 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api.js';
+import { secureStorage, STORAGE_KEYS } from '../utils/secureStorage.js';
 
 const AuthContext = createContext(null);
 
 function getStoredUser() {
-  try {
-    const stored = localStorage.getItem('esmms_user') || sessionStorage.getItem('esmms_user');
-    return stored ? JSON.parse(stored) : null;
-  } catch {
-    return null;
-  }
+  return secureStorage.getJSON(STORAGE_KEYS.USER);
 }
 
 function getStoredToken() {
-  try {
-    return localStorage.getItem('esmms_access_token') || sessionStorage.getItem('esmms_access_token') || null;
-  } catch {
-    return null;
-  }
+  return secureStorage.getItem(STORAGE_KEYS.TOKEN);
 }
 
 export function AuthProvider({ children }) {
@@ -28,39 +20,29 @@ export function AuthProvider({ children }) {
   const saveAuth = useCallback((userData, token) => {
     setUser(userData);
     setAccessToken(token);
-    try {
-      localStorage.setItem('esmms_user', JSON.stringify(userData));
-      localStorage.setItem('esmms_access_token', token);
-      sessionStorage.setItem('esmms_user', JSON.stringify(userData));
-      sessionStorage.setItem('esmms_access_token', token);
-    } catch {}
+    secureStorage.setItem(STORAGE_KEYS.USER, userData);
+    secureStorage.setItem(STORAGE_KEYS.TOKEN, token);
     api.defaults.headers.common.Authorization = `Bearer ${token}`;
   }, []);
 
   const clearAuth = useCallback(() => {
     setUser(null);
     setAccessToken(null);
-    try {
-      localStorage.removeItem('esmms_user');
-      localStorage.removeItem('esmms_access_token');
-      sessionStorage.removeItem('esmms_user');
-      sessionStorage.removeItem('esmms_access_token');
-    } catch {}
+    secureStorage.clear();
     delete api.defaults.headers.common.Authorization;
   }, []);
 
   // Sync session across multiple browser tabs
   useEffect(() => {
     const handleStorageChange = (e) => {
-      if (e.key === 'esmms_user') {
-        try {
-          setUser(e.newValue ? JSON.parse(e.newValue) : null);
-        } catch {}
+      if (e.key === STORAGE_KEYS.USER) {
+        setUser(secureStorage.getJSON(STORAGE_KEYS.USER));
       }
-      if (e.key === 'esmms_access_token') {
-        setAccessToken(e.newValue || null);
-        if (e.newValue) {
-          api.defaults.headers.common.Authorization = `Bearer ${e.newValue}`;
+      if (e.key === STORAGE_KEYS.TOKEN) {
+        const decrypted = secureStorage.getItem(STORAGE_KEYS.TOKEN);
+        setAccessToken(decrypted);
+        if (decrypted) {
+          api.defaults.headers.common.Authorization = `Bearer ${decrypted}`;
         } else {
           delete api.defaults.headers.common.Authorization;
         }
@@ -80,10 +62,7 @@ export function AuthProvider({ children }) {
           const { data } = await api.get('/auth/me');
           if (data.user) {
             setUser(data.user);
-            try {
-              localStorage.setItem('esmms_user', JSON.stringify(data.user));
-              sessionStorage.setItem('esmms_user', JSON.stringify(data.user));
-            } catch {}
+            secureStorage.setItem(STORAGE_KEYS.USER, data.user);
           } else {
             clearAuth();
           }

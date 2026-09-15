@@ -1,0 +1,136 @@
+# Implementation Plan: Pre-Deployment Production Readiness & Render Compatibility
+
+This implementation plan details each problem identified during the production audit and provides the exact, targeted solution to ensure Qualiva deploys cleanly and runs reliably on Render without unexpected crashes or regressions.
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **No Business Logic or UI Changes**: These changes are strictly infrastructure, networking, and deployment configuration hardening. None of your application workflows, authentication logic, or UI designs are altered.
+
+> [!TIP]
+> A `render.yaml` Blueprint will be included in the repository root to enable clean 1-click infrastructure deployment on Render for both the Frontend and Backend services simultaneously.
+
+---
+
+## Identified Problems & Solutions
+
+### 1. `server.listen` Missing Explicit `'0.0.0.0'` Binding (BLOCKER)
+
+#### Problem
+In [`server/src/server.js:218`](file:///c:/Users/Ashwin/Desktop/LMS/server/src/server.js#L218), the server starts with:
+```javascript
+server.listen(PORT, () => { ... });
+```
+Render web services run inside isolated Docker containers behind an internal NGINX reverse proxy. If Node's HTTP server is not explicitly bound to host `'0.0.0.0'`, the operating system defaults to binding to `127.0.0.1` (localhost). Render's port detection mechanism will fail to receive traffic from the public proxy, causing the deployment to time out with:
+`==> Port 10000 not responding, deployment failed`.
+
+#### Solution
+Update line 218 in [`server/src/server.js`](file:///c:/Users/Ashwin/Desktop/LMS/server/src/server.js) to explicitly bind to `'0.0.0.0'`:
+```javascript
+server.listen(PORT, '0.0.0.0', () => { ... });
+```
+
+---
+
+### 2. Hardcoded Database Credentials in Fallbacks (BLOCKER / SECURITY)
+
+#### Problem
+In [`server/src/utils/prisma.js:14,46`](file:///c:/Users/Ashwin/Desktop/LMS/server/src/utils/prisma.js#L14-L46), fallback connection strings containing real database credentials are hardcoded in the source file:
+```javascript
+const pgUrl = process.env.POSTGRES_URL || ... || 'postgresql://neondb_owner:...';
+const mongoUrl = process.env.MONGODB_URL || ... || 'mongodb+srv://...';
+```
+If the repository is pushed to a remote git provider (GitHub, GitLab), these production connection credentials are exposed. If an environment variable is mistyped on Render, the server might silently connect to a development database instead of failing visibly.
+
+#### Solution
+Remove hardcoded credentials from source code. Require connection URLs to be provided via environment variables (`DATABASE_URL`, `POSTGRES_URL`, `MONGODB_URL`), logging a clean diagnostic error if missing in production.
+
+---
+
+### 3. `VITE_API_URL` Missing Trailing `/api/v1` Normalization (HIGH)
+
+#### Problem
+In [`client/src/services/api.js:4-6`](file:///c:/Users/Ashwin/Desktop/LMS/client/src/services/api.js#L4-L6):
+```javascript
+const API_BASE_URL = import.meta.env.VITE_API_URL
+  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
+  : '/api/v1';
+```
+If an administrator configures `VITE_API_URL=https://qualiva-backend.onrender.com` in Render's dashboard (omitting the `/api/v1` path), all API calls (e.g. `api.get('/auth/me')`) resolve to `https://qualiva-backend.onrender.com/auth/me` and fail with HTTP `404 Not Found`.
+
+#### Solution
+Normalize `API_BASE_URL` in [`client/src/services/api.js`](file:///c:/Users/Ashwin/Desktop/LMS/client/src/services/api.js) so that if `cleanUrl` does not already end with `/api/v1`, it automatically appends `/api/v1`:
+```javascript
+const rawApiUrl = import.meta.env.VITE_API_URL || '';
+const cleanUrl = rawApiUrl.replace(/\/$/, '');
+const API_BASE_URL = cleanUrl
+  ? (cleanUrl.endsWith('/api/v1') ? cleanUrl : `${cleanUrl}/api/v1`)
+  : '/api/v1';
+```
+
+---
+
+### 4. Native Binary Dependency `better-sqlite3` in `package.json` (HIGH)
+
+#### Problem
+In [`server/package.json:21`](file:///c:/Users/Ashwin/Desktop/LMS/server/package.json#L21), `"better-sqlite3": "^13.0.3"` and `"@prisma/adapter-better-sqlite3": "^7.10.0"` are listed as dependencies.
+`better-sqlite3` is a compiled C++ binary module requiring `node-gyp`, Python, and make tools. It is not imported or used anywhere in the active codebase (Qualiva runs on PostgreSQL, MongoDB Atlas, and Prisma). If Render's Linux build container encounters a node-gyp or compiler mismatch, `npm install` will fail and abort the build.
+
+#### Solution
+Safely remove `"better-sqlite3"` and `"@prisma/adapter-better-sqlite3"` from [`server/package.json`](file:///c:/Users/Ashwin/Desktop/LMS/server/package.json) and synchronize `package-lock.json`.
+
+---
+
+### 5. Render Blueprint Configuration (`render.yaml`) (ENHANCEMENT)
+
+#### Problem
+Manually creating and configuring two separate services (Static Site for `client` and Web Service for `server`) in the Render web dashboard is error-prone. One wrong path or missing rewrite rule causes 404s.
+
+#### Solution
+Create a clean, standardized [`render.yaml`](file:///c:/Users/Ashwin/Desktop/LMS/render.yaml) at the repository root defining both services:
+1. **Frontend**: Static Site, root `client`, build command `npm install && npm run build`, publish directory `dist`, with SPA rewrite rule `/* -> /index.html`.
+2. **Backend**: Web Service, root `server`, build command `npm install && npx prisma generate`, start command `node src/server.js`, health check path `/api/v1/health`.
+
+---
+
+## Proposed Changes
+
+### Backend Component (`server/`)
+
+#### [MODIFY] [server.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/server.js)
+- Update `server.listen` to include `'0.0.0.0'`.
+
+#### [MODIFY] [prisma.js](file:///c:/Users/Ashwin/Desktop/LMS/server/src/utils/prisma.js)
+- Remove hardcoded credentials from fallback strings; rely strictly on `process.env`.
+
+#### [MODIFY] [package.json](file:///c:/Users/Ashwin/Desktop/LMS/server/package.json)
+- Remove unused native `better-sqlite3` dependencies.
+
+---
+
+### Frontend Component (`client/`)
+
+#### [MODIFY] [api.js](file:///c:/Users/Ashwin/Desktop/LMS/client/src/services/api.js)
+- Add `/api/v1` path normalization to `API_BASE_URL`.
+
+---
+
+### Infrastructure Component (Root)
+
+#### [NEW] [render.yaml](file:///c:/Users/Ashwin/Desktop/LMS/render.yaml)
+- Define 1-click Blueprint for Render containing Frontend Static Site and Backend Web Service definitions.
+
+---
+
+## Verification Plan
+
+### Automated Tests & Builds
+1. **Client Build Test**: Run `npm run build` in `client/` and verify clean compilation.
+2. **Server Build & Start Test**: Run `npx prisma generate` in `server/`, then run `node src/server.js` with `PORT=10000` and `NODE_ENV=production`, checking that `http://0.0.0.0:10000/api/v1/health` responds with HTTP 200 `{ status: 'online' }`.
+3. **Dependency Integrity Test**: Run `npm install` in `server/` to ensure clean dependency tree without native build warnings.
+
+### Manual Verification
+1. Inspect generated `render.yaml` to ensure paths, build commands, and publish directories match project structure exactly.
+2. Verify that no raw credentials remain in tracked repository files.

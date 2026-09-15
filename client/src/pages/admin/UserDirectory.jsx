@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ROUTES } from '../../routes/routeMap.js';
 import { api } from '../../services/api.js';
 import { useSocket } from '../../context/SocketContext.jsx';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
@@ -397,7 +398,7 @@ export default function UserDirectory() {
                 {users.map((u) => (
                   <tr
                     key={u.id}
-                    onClick={() => navigate(`/admin/users/${u.id}`)}
+                    onClick={() => navigate(ROUTES.ADMIN_USER_DETAIL(u.id))}
                     className="table-row-inset-divider hover:bg-surface-tertiary/40 dark:hover:bg-dark-elevated/40 transition-colors cursor-pointer group"
                     title="Click to view and edit user details"
                   >

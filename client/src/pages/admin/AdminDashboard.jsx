@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { ROUTES } from '../../routes/routeMap.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useSocket } from '../../context/SocketContext.jsx';
 import { api } from '../../services/api.js';
@@ -162,14 +163,14 @@ export default function AdminDashboard() {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => navigate('/admin/users')}
+              onClick={() => navigate(ROUTES.ADMIN_USERS)}
               leftIcon={<FileSpreadsheet className="h-4 w-4 text-emerald-500" />}
             >
               Bulk Excel Import
             </Button>
             <Button
               size="sm"
-              onClick={() => navigate('/admin/users')}
+              onClick={() => navigate(ROUTES.ADMIN_USERS)}
               leftIcon={<UserPlus className="h-4 w-4" />}
             >
               Add User
@@ -248,7 +249,7 @@ export default function AdminDashboard() {
               )}
             </div>
             <Link
-              to="/admin/approvals"
+              to={ROUTES.ADMIN_APPROVALS}
               className="text-sm text-brand-600 dark:text-brand-400 font-semibold hover:underline flex items-center gap-1"
             >
               View All <ArrowRight className="h-3.5 w-3.5" />
@@ -288,7 +289,7 @@ export default function AdminDashboard() {
                       <span>Awaiting Sign-off</span>
                     </div>
                     <Link
-                      to="/admin/approvals"
+                      to={ROUTES.ADMIN_APPROVALS}
                       className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline"
                     >
                       Review →
@@ -305,7 +306,7 @@ export default function AdminDashboard() {
           <div className="flex items-center justify-between pb-3 border-b border-app">
             <h3 className="font-bold text-base text-app">Recent Platform Activity</h3>
             <Link
-              to="/admin/audit"
+              to={ROUTES.ADMIN_AUDIT}
               className="text-sm text-brand-600 dark:text-brand-400 font-semibold hover:underline flex items-center gap-1"
             >
               Audit Ledger <ArrowRight className="h-3.5 w-3.5" />

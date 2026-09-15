@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { NavLink, Link, useNavigate, useLocation, Outlet } from 'react-router-dom';
+import { ROUTES } from '../../routes/routeMap.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useTheme } from '../../context/ThemeContext.jsx';
 import { useSocket } from '../../context/SocketContext.jsx';
@@ -109,7 +110,12 @@ export function AppShell() {
 
   // Sync badge counts whenever user navigates to approval/review routes
   useEffect(() => {
-    if (location.pathname.startsWith('/admin/approvals') || location.pathname.startsWith('/creator/requests')) {
+    if (
+      location.pathname.startsWith('/admin/approvals') ||
+      location.pathname.startsWith(ROUTES.ADMIN_APPROVALS) ||
+      location.pathname.startsWith('/creator/requests') ||
+      location.pathname.startsWith(ROUTES.CREATOR_REQUESTS)
+    ) {
       fetchBadgeCounts();
     }
   }, [location.pathname, fetchBadgeCounts]);
@@ -234,15 +240,15 @@ export function AppShell() {
   })();
 
   const moderatorNavItems = [
-    { label: 'Moderator Overview', path: '/moderator', icon: <LayoutDashboard className="h-4 w-4" />, exact: true },
+    { label: 'Moderator Overview', path: ROUTES.MODERATOR_DASHBOARD, icon: <LayoutDashboard className="h-4 w-4" />, exact: true },
     ...(userRole === 'ADMIN' || moderatorPerms.users?.view
-      ? [{ label: 'User Directory', path: '/moderator/users', icon: <Users className="h-4 w-4" /> }]
+      ? [{ label: 'User Directory', path: ROUTES.MODERATOR_USERS, icon: <Users className="h-4 w-4" /> }]
       : []),
     ...(userRole === 'ADMIN' || moderatorPerms.courses?.view
-      ? [{ label: 'Course Quality Review', path: '/moderator/courses', icon: <BookOpen className="h-4 w-4" /> }]
+      ? [{ label: 'Course Quality Review', path: ROUTES.MODERATOR_COURSES, icon: <BookOpen className="h-4 w-4" /> }]
       : []),
     ...(userRole === 'ADMIN' || moderatorPerms.transfers?.view
-      ? [{ label: 'Transfer Requests', path: '/moderator/transfers', icon: <CheckSquare className="h-4 w-4" /> }]
+      ? [{ label: 'Transfer Requests', path: ROUTES.MODERATOR_TRANSFERS, icon: <CheckSquare className="h-4 w-4" /> }]
       : []),
     ...(userRole === 'ADMIN' || moderatorPerms.messages?.view !== false
       ? [{ label: 'Inbox & Messages', path: '/inbox', icon: <Mail className="h-4 w-4" />, badge: unreadMessagesCount > 0 ? String(unreadMessagesCount) : null }]
@@ -252,18 +258,18 @@ export function AppShell() {
   // Navigation Items by Role with clean exact routes and real-time badges
   const navByRole = {
     ADMIN: [
-      { label: 'Admin Dashboard', path: '/admin', icon: <LayoutDashboard className="h-4 w-4" />, exact: true },
-      { label: 'User Directory', path: '/admin/users', icon: <Users className="h-4 w-4" />, badge: passwordResetRequestsCount > 0 ? String(passwordResetRequestsCount) : null },
-      { label: 'Course Management', path: '/admin/courses', icon: <BookOpen className="h-4 w-4" /> },
-      { label: 'Approvals Hub', path: '/admin/approvals', icon: <CheckSquare className="h-4 w-4" />, badge: pendingRequestsCount > 0 ? String(pendingRequestsCount) : null },
-      { label: 'Security & Audit Logs', path: '/admin/audit', icon: <ShieldAlert className="h-4 w-4" /> },
+      { label: 'Admin Dashboard', path: ROUTES.ADMIN_DASHBOARD, icon: <LayoutDashboard className="h-4 w-4" />, exact: true },
+      { label: 'User Directory', path: ROUTES.ADMIN_USERS, icon: <Users className="h-4 w-4" />, badge: passwordResetRequestsCount > 0 ? String(passwordResetRequestsCount) : null },
+      { label: 'Course Management', path: ROUTES.ADMIN_COURSES, icon: <BookOpen className="h-4 w-4" /> },
+      { label: 'Approvals Hub', path: ROUTES.ADMIN_APPROVALS, icon: <CheckSquare className="h-4 w-4" />, badge: pendingRequestsCount > 0 ? String(pendingRequestsCount) : null },
+      { label: 'Security & Audit Logs', path: ROUTES.ADMIN_AUDIT, icon: <ShieldAlert className="h-4 w-4" /> },
       { label: 'Inbox & Messages', path: '/inbox', icon: <Mail className="h-4 w-4" />, badge: unreadMessagesCount > 0 ? String(unreadMessagesCount) : null },
     ],
     COURSE_CREATOR: [
-      { label: 'Creator Studio', path: '/creator/studio', icon: <Layers className="h-4 w-4" /> },
-      { label: 'My Courses', path: '/creator/courses', icon: <BookOpen className="h-4 w-4" /> },
-      { label: 'Question Banks', path: '/creator/assessments', icon: <FileCheck2 className="h-4 w-4" /> },
-      { label: 'Student Review Queue', path: '/creator/requests', icon: <CheckSquare className="h-4 w-4" />, badge: pendingRequestsCount > 0 ? String(pendingRequestsCount) : null },
+      { label: 'Creator Studio', path: ROUTES.CREATOR_STUDIO, icon: <Layers className="h-4 w-4" /> },
+      { label: 'My Courses', path: ROUTES.CREATOR_COURSES, icon: <BookOpen className="h-4 w-4" /> },
+      { label: 'Question Banks', path: ROUTES.CREATOR_ASSESSMENTS, icon: <FileCheck2 className="h-4 w-4" /> },
+      { label: 'Student Review Queue', path: ROUTES.CREATOR_REQUESTS, icon: <CheckSquare className="h-4 w-4" />, badge: pendingRequestsCount > 0 ? String(pendingRequestsCount) : null },
       { label: 'Inbox & Messages', path: '/inbox', icon: <Mail className="h-4 w-4" />, badge: unreadMessagesCount > 0 ? String(unreadMessagesCount) : null },
     ],
     MODERATOR: moderatorNavItems,
@@ -686,7 +692,7 @@ export function AppShell() {
 
                     {user?.role === 'ADMIN' && (
                       <Link
-                        to="/admin/settings"
+                        to={ROUTES.ADMIN_SETTINGS}
                         onClick={() => setProfileDropdownOpen(false)}
                         className="w-full text-left px-4 py-2 text-xs text-app hover:bg-elevated flex items-center gap-2.5 transition-colors font-medium"
                       >

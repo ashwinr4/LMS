@@ -1,7 +1,10 @@
 import axios from 'axios';
+import { secureStorage, STORAGE_KEYS } from '../utils/secureStorage.js';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
+const rawApiUrl = import.meta.env.VITE_API_URL || '';
+const cleanApiUrl = rawApiUrl.replace(/\/$/, '');
+const API_BASE_URL = cleanApiUrl
+  ? (cleanApiUrl.endsWith('/api/v1') ? cleanApiUrl : `${cleanApiUrl}/api/v1`)
   : '/api/v1';
 
 export const api = axios.create({
@@ -15,27 +18,15 @@ export const api = axios.create({
 
 // Helper for resilient persistent storage with fallback
 const getStoredToken = () => {
-  try {
-    return localStorage.getItem('esmms_access_token') || sessionStorage.getItem('esmms_access_token');
-  } catch {
-    return null;
-  }
+  return secureStorage.getItem(STORAGE_KEYS.TOKEN);
 };
 
 const setStoredToken = (token) => {
-  try {
-    localStorage.setItem('esmms_access_token', token);
-    sessionStorage.setItem('esmms_access_token', token);
-  } catch {}
+  secureStorage.setItem(STORAGE_KEYS.TOKEN, token);
 };
 
 const clearStoredTokens = () => {
-  try {
-    localStorage.removeItem('esmms_access_token');
-    localStorage.removeItem('esmms_user');
-    sessionStorage.removeItem('esmms_access_token');
-    sessionStorage.removeItem('esmms_user');
-  } catch {}
+  secureStorage.clear();
 };
 
 // Request interceptor: attaches Bearer token from storage if present
@@ -69,8 +60,14 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+    const currentToken = getStoredToken();
 
-    if (error.response?.status === 401 && !originalRequest._retry && !originalRequest.url?.includes('/auth/login')) {
+    if (
+      currentToken &&
+      error.response?.status === 401 &&
+      !originalRequest._retry &&
+      !originalRequest.url?.includes('/auth/login')
+    ) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });

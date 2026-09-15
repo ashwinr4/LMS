@@ -1,5 +1,6 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
+import { cache } from '../utils/cache.js';
 
 // ============================================================
 // LIST MODULES (public, all)
@@ -7,6 +8,11 @@ import { logger } from '../utils/logger.js';
 export async function listModules(req, res) {
   try {
     const { department, status = 'ACTIVE', type, search } = req.query;
+    const cacheKey = `modules:list:${department || ''}:${status || ''}:${type || ''}:${search || ''}`;
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
 
     const where = { status };
     if (department) where.department = department;
@@ -44,7 +50,7 @@ export async function listModules(req, res) {
       },
     });
 
-    return res.status(200).json({
+    const payload = {
       success: true,
       modules: modules.map((m) => ({
         ...m,
@@ -53,7 +59,10 @@ export async function listModules(req, res) {
         sectionCount: m._count.sections,
         enrolledCount: m._count.assignments,
       })),
-    });
+    };
+
+    cache.set(cacheKey, payload, 30);
+    return res.status(200).json(payload);
   } catch (error) {
     logger.error(`List Modules Error: ${error.message}`);
     return res.status(500).json({ success: false, message: 'Failed to fetch modules.' });
@@ -66,6 +75,11 @@ export async function listModules(req, res) {
 export async function getModule(req, res) {
   try {
     const { id } = req.params;
+    const cacheKey = `modules:detail:${id}`;
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
 
     const module = await prisma.module.findUnique({
       where: { id },
@@ -99,7 +113,7 @@ export async function getModule(req, res) {
       return res.status(404).json({ success: false, message: 'Module not found.' });
     }
 
-    return res.status(200).json({
+    const payload = {
       success: true,
       module: {
         ...module,
@@ -107,7 +121,10 @@ export async function getModule(req, res) {
         prerequisites: module.prerequisites ? JSON.parse(module.prerequisites) : [],
         enrolledCount: module._count.assignments,
       },
-    });
+    };
+
+    cache.set(cacheKey, payload, 30);
+    return res.status(200).json(payload);
   } catch (error) {
     logger.error(`Get Module Error: ${error.message}`);
     return res.status(500).json({ success: false, message: 'Failed to fetch module.' });
@@ -158,6 +175,8 @@ export async function createModule(req, res) {
     });
 
     logger.info(`Module created: ${module.code} by ${req.user.email}`);
+    cache.invalidatePrefix('modules:');
+    cache.invalidatePrefix('admin:');
     return res.status(201).json({ success: true, module });
   } catch (error) {
     logger.error(`Create Module Error: ${error.message}`);
@@ -182,6 +201,8 @@ export async function updateModule(req, res) {
       },
     });
 
+    cache.invalidatePrefix('modules:');
+    cache.invalidatePrefix('admin:');
     return res.status(200).json({ success: true, module });
   } catch (error) {
     logger.error(`Update Module Error: ${error.message}`);
@@ -196,6 +217,8 @@ export async function deleteModule(req, res) {
   try {
     const { id } = req.params;
     await prisma.module.delete({ where: { id } });
+    cache.invalidatePrefix('modules:');
+    cache.invalidatePrefix('admin:');
     return res.status(200).json({ success: true, message: 'Module deleted successfully.' });
   } catch (error) {
     logger.error(`Delete Module Error: ${error.message}`);
@@ -218,6 +241,7 @@ export async function createSection(req, res) {
       data: { moduleId, title, order: count },
     });
 
+    cache.invalidatePrefix('modules:');
     return res.status(201).json({ success: true, section });
   } catch (error) {
     logger.error(`Create Section Error: ${error.message}`);
@@ -232,6 +256,7 @@ export async function updateSection(req, res) {
       where: { id: sectionId },
       data: req.body,
     });
+    cache.invalidatePrefix('modules:');
     return res.status(200).json({ success: true, section });
   } catch (error) {
     logger.error(`Update Section Error: ${error.message}`);
@@ -243,6 +268,7 @@ export async function deleteSection(req, res) {
   try {
     const { sectionId } = req.params;
     await prisma.section.delete({ where: { id: sectionId } });
+    cache.invalidatePrefix('modules:');
     return res.status(200).json({ success: true, message: 'Section deleted.' });
   } catch (error) {
     logger.error(`Delete Section Error: ${error.message}`);
@@ -265,6 +291,7 @@ export async function createLesson(req, res) {
       data: { sectionId, title, type, videoUrl, content, documentName, duration, notes, order: count },
     });
 
+    cache.invalidatePrefix('modules:');
     return res.status(201).json({ success: true, lesson });
   } catch (error) {
     logger.error(`Create Lesson Error: ${error.message}`);
@@ -279,6 +306,7 @@ export async function updateLesson(req, res) {
       where: { id: lessonId },
       data: req.body,
     });
+    cache.invalidatePrefix('modules:');
     return res.status(200).json({ success: true, lesson });
   } catch (error) {
     logger.error(`Update Lesson Error: ${error.message}`);
@@ -290,6 +318,7 @@ export async function deleteLesson(req, res) {
   try {
     const { lessonId } = req.params;
     await prisma.lesson.delete({ where: { id: lessonId } });
+    cache.invalidatePrefix('modules:');
     return res.status(200).json({ success: true, message: 'Lesson deleted.' });
   } catch (error) {
     logger.error(`Delete Lesson Error: ${error.message}`);

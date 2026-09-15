@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { ROUTES } from '../../routes/routeMap.js';
 import { api } from '../../services/api.js';
 import { Button } from '../../components/ui/Button.jsx';
 import { Avatar } from '../../components/ui/Avatar.jsx';
@@ -179,7 +180,7 @@ export default function AdminUserDetail() {
         <AlertCircle className="h-10 w-10 text-red-500 mx-auto" />
         <h2 className="text-base font-bold text-app">User Record Unavailable</h2>
         <p className="text-xs text-app-secondary max-w-md mx-auto">{error}</p>
-        <Button variant="outline" size="sm" onClick={() => navigate('/admin/users')}>
+        <Button variant="outline" size="sm" onClick={() => navigate(ROUTES.ADMIN_USERS)}>
           Return to User Directory
         </Button>
       </div>
@@ -209,7 +210,7 @@ export default function AdminUserDetail() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-app">
         <div className="flex items-center gap-3">
           <Link
-            to="/admin/users"
+            to={ROUTES.ADMIN_USERS}
             className="-ml-1.5 -mt-1 p-1.5 rounded text-app-muted hover:text-app hover:bg-surface-tertiary transition-colors"
             title="Return to User Directory"
           >

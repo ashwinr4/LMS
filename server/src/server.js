@@ -215,9 +215,9 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // 10. Start Server
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   logger.info(`====================================================`);
-  logger.info(`🚀 ESMMS Backend Server running on port ${PORT}`);
+  logger.info(`🚀 ESMMS Backend Server running on port ${PORT} (0.0.0.0)`);
   logger.info(`📡 WebSocket Server initialized on port ${PORT}`);
   logger.info(`🔒 Security headers (Helmet) & CORS active for ${ALLOWED_ORIGINS.join(', ')}`);
   logger.info(`🩺 Health Check: http://localhost:${PORT}/api/v1/health`);

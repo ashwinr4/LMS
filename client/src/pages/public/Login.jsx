@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { ROUTES } from '../../routes/routeMap.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { Input } from '../../components/ui/Input.jsx';
@@ -66,9 +67,9 @@ export default function Login() {
       navigate(from, { replace: true });
       return;
     }
-    if (role === 'ADMIN') navigate('/admin');
-    else if (role === 'COURSE_CREATOR') navigate('/creator');
-    else if (role === 'MODERATOR') navigate('/moderator');
+    if (role === 'ADMIN') navigate(ROUTES.ADMIN_DASHBOARD);
+    else if (role === 'COURSE_CREATOR') navigate(ROUTES.CREATOR_DASHBOARD);
+    else if (role === 'MODERATOR') navigate(ROUTES.MODERATOR_DASHBOARD);
     else navigate('/courses');
   };
 
