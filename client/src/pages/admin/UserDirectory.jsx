@@ -33,9 +33,11 @@ import {
 import { CustomDropdown } from '../../components/ui/CustomDropdown.jsx';
 import { Avatar } from '../../components/ui/Avatar.jsx';
 import { SegmentedToggle } from '../../components/ui/SegmentedToggle.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 export default function UserDirectory() {
   const navigate = useNavigate();
+  const { user: currentUser } = useAuth();
   const { socket } = useSocket();
   const [users, setUsers] = useState([]);
   const [stats, setStats] = useState(null);
@@ -126,7 +128,11 @@ export default function UserDirectory() {
       };
       const res = await api.get('/admin/users', { params });
       if (res.data.success) {
-        setUsers(res.data.users || []);
+        const rawUsers = res.data.users || [];
+        const filtered = rawUsers.filter(
+          (u) => u.id !== currentUser?.id && u.email?.toLowerCase() !== currentUser?.email?.toLowerCase()
+        );
+        setUsers(filtered);
         setStats(res.data.stats || null);
       }
     } catch (err) {
@@ -280,6 +286,10 @@ export default function UserDirectory() {
     document.body.removeChild(link);
   };
 
+  const displayUsers = users.filter(
+    (u) => u.id !== currentUser?.id && u.email?.toLowerCase() !== currentUser?.email?.toLowerCase()
+  );
+
   return (
     <div className="space-y-8 animate-fade-in pb-12">
       <PageHeader
@@ -376,7 +386,7 @@ export default function UserDirectory() {
             <AlertCircle className="h-8 w-8 text-red-500 mx-auto" />
             <p className="text-xs text-red-600 dark:text-red-400 font-semibold">{error}</p>
           </div>
-        ) : users.length === 0 ? (
+        ) : displayUsers.length === 0 ? (
           <div className="p-12 text-center space-y-3">
             <Users className="h-10 w-10 text-app-muted mx-auto" />
             <h4 className="text-sm font-bold text-app">No Users Match Filters</h4>
@@ -395,7 +405,7 @@ export default function UserDirectory() {
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
+                {displayUsers.map((u) => (
                   <tr
                     key={u.id}
                     onClick={() => navigate(ROUTES.ADMIN_USER_DETAIL(u.id))}

@@ -22,6 +22,9 @@ export async function listUsers(req, res) {
     const take = Number(limit);
 
     const where = {};
+    if (req.user?.id) {
+      where.id = { not: req.user.id };
+    }
     if (role && role !== 'ALL') where.role = role;
     if (status && status !== 'ALL') where.status = status;
     if (department && department !== 'ALL') where.department = department;

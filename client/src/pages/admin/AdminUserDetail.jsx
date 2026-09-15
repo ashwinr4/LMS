@@ -23,10 +23,13 @@ import {
   History,
 } from 'lucide-react';
 import { ModeratorPermissionModal, MODERATOR_MODULES } from '../../components/admin/ModeratorPermissionModal.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 export default function AdminUserDetail() {
   const { userId } = useParams();
   const navigate = useNavigate();
+  const { user: currentUser } = useAuth();
+  const isSelf = Boolean(currentUser?.id && userId && currentUser.id === userId);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [userData, setUserData] = useState(null);
@@ -248,6 +251,19 @@ export default function AdminUserDetail() {
         </div>
       </div>
 
+      {/* ── Self-Profile Advisory Banner ──────────────────── */}
+      {isSelf && (
+        <div className="p-3.5 rounded-card bg-brand-500/10 border border-brand-500/20 text-xs text-brand-700 dark:text-brand-300 flex items-center justify-between shadow-sm">
+          <span>You are viewing your own administrator account. Personal preferences and profile credentials can be managed in Account Settings.</span>
+          <Link
+            to={ROUTES.PROFILE}
+            className="font-semibold underline ml-3 shrink-0 hover:opacity-80"
+          >
+            Go to Profile
+          </Link>
+        </div>
+      )}
+
       {/* ── Status Feedback Banners ───────────────────────── */}
       {success && (
         <div className="p-3.5 rounded-card bg-emerald-500/10 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2.5 shadow-sm">
@@ -366,10 +382,12 @@ export default function AdminUserDetail() {
                   <Button
                     type="button"
                     size="sm"
+                    disabled={isSelf}
                     isLoading={resettingPassword}
                     onClick={handleGenerateTempPassword}
                     leftIcon={<KeyRound className="h-4 w-4" />}
-                    className="bg-brand-600 hover:bg-brand-700 text-white font-semibold"
+                    className="bg-brand-600 hover:bg-brand-700 text-white font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={isSelf ? 'You cannot reset your own password here. Use Profile settings.' : undefined}
                   >
                     Require Reset & Send Temporary Password
                   </Button>
