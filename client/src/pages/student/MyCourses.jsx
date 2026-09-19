@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
+import { Modal } from '../../components/ui/Modal.jsx';
 import {
   BookOpen,
   Clock,
@@ -14,12 +16,22 @@ import {
   CheckCircle2,
   FileCheck2,
   RefreshCw,
+  Send,
 } from 'lucide-react';
 
 export default function MyCourses() {
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Extension / Transfer Modal State
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedCourse, setSelectedCourse] = useState(null);
+  const [requestType, setRequestType] = useState('SLA_EXTENSION');
+  const [requestedDays, setRequestedDays] = useState(14);
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     async function loadAssignments() {
@@ -42,6 +54,46 @@ export default function MyCourses() {
     const diffDays = Math.ceil((due - now) / (1000 * 60 * 60 * 24));
     if (diffDays <= 0) return 'Overdue';
     return `In ${diffDays} day${diffDays > 1 ? 's' : ''}`;
+  };
+
+  const handleOpenExtensionModal = (courseItem) => {
+    setSelectedCourse(courseItem);
+    setRequestType('SLA_EXTENSION');
+    setRequestedDays(14);
+    setReason('');
+    setModalOpen(true);
+  };
+
+  const handleSubmitRequest = async (e) => {
+    e.preventDefault();
+    if (!reason.trim()) {
+      addToast({ type: 'error', title: 'Reason required', message: 'Please provide a brief justification.' });
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload = {
+        type: requestType,
+        courseId: selectedCourse?.moduleId,
+        requestedDays: Number(requestedDays),
+        reason: reason.trim(),
+      };
+      await api.post('/transfers', payload);
+      addToast({
+        type: 'success',
+        title: 'Request Submitted',
+        message: 'Your extension request has been sent for administrative review.',
+      });
+      setModalOpen(false);
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: 'Submission Failed',
+        message: err.response?.data?.message || 'Could not submit request.',
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -107,7 +159,7 @@ export default function MyCourses() {
               </div>
 
               <div className="flex flex-col sm:flex-row items-center gap-3 shrink-0">
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" onClick={() => handleOpenExtensionModal(item)}>
                   Request Extension
                 </Button>
                 <Button
@@ -122,6 +174,64 @@ export default function MyCourses() {
           ))}
         </div>
       )}
+
+      {/* SLA Extension / Transfer Modal */}
+      <Modal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Request SLA Extension"
+        description={`Submit a deadline adjustment for ${selectedCourse?.title || 'course'}`}
+      >
+        <form onSubmit={handleSubmitRequest} className="space-y-4 text-app">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-app">Request Type</label>
+            <select
+              value={requestType}
+              onChange={(e) => setRequestType(e.target.value)}
+              className="w-full bg-surface dark:bg-dark-surface border border-app rounded-btn p-2 text-xs text-app"
+            >
+              <option value="SLA_EXTENSION">SLA Deadline Extension</option>
+              <option value="COURSE_TRANSFER">Course / Track Transfer</option>
+            </select>
+          </div>
+
+          {requestType === 'SLA_EXTENSION' && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-app">Additional Days Needed</label>
+              <select
+                value={requestedDays}
+                onChange={(e) => setRequestedDays(Number(e.target.value))}
+                className="w-full bg-surface dark:bg-dark-surface border border-app rounded-btn p-2 text-xs text-app"
+              >
+                <option value={7}>+7 Days (1 Week Extension)</option>
+                <option value={14}>+14 Days (Standard 2-Week Extension)</option>
+                <option value={30}>+30 Days (1 Month Extension)</option>
+              </select>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-app">Statement & Justification</label>
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Explain the reason for this extension (e.g. project workload, medical, scheduling conflict)..."
+              rows={3}
+              required
+              className="w-full bg-surface dark:bg-dark-surface border border-app rounded-btn p-2.5 text-xs text-app resize-none placeholder:text-app-muted"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2.5 pt-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => setModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" isLoading={submitting} leftIcon={<Send className="h-3.5 w-3.5" />}>
+              Submit Request
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

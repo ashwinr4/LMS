@@ -54,10 +54,10 @@ export async function listModules(req, res) {
       success: true,
       modules: modules.map((m) => ({
         ...m,
-        outcomes: m.outcomes ? JSON.parse(m.outcomes) : [],
-        prerequisites: m.prerequisites ? JSON.parse(m.prerequisites) : [],
-        sectionCount: m._count.sections,
-        enrolledCount: m._count.assignments,
+        outcomes: m.outcomes ? (typeof m.outcomes === 'string' ? JSON.parse(m.outcomes) : m.outcomes) : [],
+        prerequisites: m.prerequisites ? (typeof m.prerequisites === 'string' ? JSON.parse(m.prerequisites) : m.prerequisites) : [],
+        sectionCount: m._count?.sections ?? (Array.isArray(m.sections) ? m.sections.length : 0),
+        enrolledCount: m._count?.assignments ?? (Array.isArray(m.assignments) ? m.assignments.length : 0),
       })),
     };
 

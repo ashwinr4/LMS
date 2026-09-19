@@ -69,9 +69,41 @@ export async function listTransfers(req, res) {
       prisma.transferRequest.count(),
     ]);
 
+    const normalizedRequests = requests.map((r) => {
+      const user = r.user || {
+        id: r.studentId || r.userId,
+        name: r.studentName || r.userName || 'Student Candidate',
+        email: r.studentEmail || r.userEmail || '',
+        avatar: null,
+        role: 'USER',
+        department: r.department || null,
+      };
+
+      const course = r.course || {
+        id: r.currentCourseId || r.courseId,
+        title: r.currentCourse || r.courseTitle || 'Enrolled Course Curriculum',
+      };
+
+      const targetCourse = r.targetCourse && typeof r.targetCourse === 'object'
+        ? r.targetCourse
+        : (r.targetCourseId || r.targetCourse
+            ? { id: r.targetCourseId, title: typeof r.targetCourse === 'string' ? r.targetCourse : 'Requested Curriculum Track' }
+            : null);
+
+      return {
+        ...r,
+        user,
+        course,
+        targetCourse,
+        requestedDays: r.requestedDays || (r.currentDeadline && r.requestedDeadline
+          ? Math.round((new Date(r.requestedDeadline) - new Date(r.currentDeadline)) / (1000 * 60 * 60 * 24))
+          : 14),
+      };
+    });
+
     return res.status(200).json({
       success: true,
-      requests,
+      requests: normalizedRequests,
       counts: {
         pending: pendingCount,
         approved: approvedCount,
@@ -102,7 +134,7 @@ export async function createTransfer(req, res) {
       fromDepartment,
       toDepartment,
       reason,
-      requestedDays,
+      requestedDays = 14,
     } = req.body;
 
     if (!reason || !reason.trim()) {
@@ -112,42 +144,68 @@ export async function createTransfer(req, res) {
       });
     }
 
+    let courseTitle = 'Enrolled Course Curriculum';
+    if (courseId) {
+      const c = await prisma.module.findUnique({ where: { id: courseId }, select: { title: true } });
+      if (c) courseTitle = c.title;
+    }
+    let targetTitle = null;
+    if (targetCourseId) {
+      const tc = await prisma.module.findUnique({ where: { id: targetCourseId }, select: { title: true } });
+      if (tc) targetTitle = tc.title;
+    }
+
+    const typeLabelMap = {
+      SLA_EXTENSION: 'SLA Deadline Extension',
+      COURSE_TRANSFER: 'Course / Track Transfer',
+      DEPARTMENT_TRANSFER: 'Department Reallocation',
+    };
+
     const transfer = await prisma.transferRequest.create({
       data: {
+        requestId: `TR-${Math.floor(1000 + Math.random() * 9000)}`,
         userId: req.user.id,
+        studentId: req.user.id,
+        studentName: req.user.name || 'Learner',
+        studentEmail: req.user.email || '',
+        department: req.user.department || fromDepartment || 'Engineering',
         type,
+        typeLabel: typeLabelMap[type] || 'Course Transfer',
         courseId: courseId || null,
+        currentCourseId: courseId || null,
+        currentCourse: courseTitle,
         targetCourseId: targetCourseId || null,
+        targetCourse: targetTitle,
         fromDepartment: fromDepartment || null,
         toDepartment: toDepartment || null,
         reason: reason.trim(),
-        requestedDays: requestedDays ? Number(requestedDays) : null,
+        requestedDays: requestedDays ? Number(requestedDays) : 14,
         status: 'PENDING',
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            avatar: true,
-            role: true,
-            department: true,
-          },
-        },
-        course: { select: { id: true, title: true } },
-        targetCourse: { select: { id: true, title: true } },
       },
     });
 
+    const formattedTransfer = {
+      ...transfer,
+      user: {
+        id: req.user.id,
+        name: req.user.name || 'Learner',
+        email: req.user.email,
+        avatar: req.user.avatar || null,
+        role: req.user.role || 'USER',
+        department: req.user.department || 'Engineering',
+      },
+      course: { id: courseId, title: courseTitle },
+      targetCourse: targetTitle ? { id: targetCourseId, title: targetTitle } : null,
+    };
+
     if (io) {
-      io.emit('transfer:created', transfer);
+      io.emit('transfer:created', formattedTransfer);
     }
 
     return res.status(201).json({
       success: true,
       message: 'Request submitted successfully.',
-      transfer,
+      transfer: formattedTransfer,
     });
   } catch (error) {
     logger.error('Error in createTransfer:', error);
@@ -188,21 +246,22 @@ export async function approveTransfer(req, res) {
     }
 
     // Process type-specific logic
-    if (existing.type === 'SLA_EXTENSION' && existing.courseId && existing.requestedDays) {
-      // Extend enrollment deadline if exists
-      const enrollment = await prisma.enrollment.findFirst({
+    if (existing.type === 'SLA_EXTENSION' && (existing.courseId || existing.currentCourseId) && existing.requestedDays) {
+      const targetCourseId = existing.courseId || existing.currentCourseId;
+      const targetUserId = existing.userId || existing.studentId;
+      const assignment = await prisma.assignment.findFirst({
         where: {
-          userId: existing.userId,
-          courseId: existing.courseId,
+          userId: targetUserId,
+          moduleId: targetCourseId,
         },
       });
 
-      if (enrollment && enrollment.slaDeadline) {
-        const currentDeadline = new Date(enrollment.slaDeadline);
+      if (assignment) {
+        const currentDeadline = assignment.dueDate ? new Date(assignment.dueDate) : new Date();
         currentDeadline.setDate(currentDeadline.getDate() + Number(existing.requestedDays));
-        await prisma.enrollment.update({
-          where: { id: enrollment.id },
-          data: { slaDeadline: currentDeadline },
+        await prisma.assignment.update({
+          where: { id: assignment.id },
+          data: { dueDate: currentDeadline },
         });
       }
     } else if (existing.type === 'DEPARTMENT_TRANSFER' && existing.toDepartment) {

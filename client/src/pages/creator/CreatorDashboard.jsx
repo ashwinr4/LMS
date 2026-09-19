@@ -192,7 +192,7 @@ export default function CreatorDashboard() {
       const [modulesRes, draftRes, reqRes] = await Promise.all([
         api.get('/modules?status=ACTIVE').catch(() => ({ data: { modules: [] } })),
         api.get('/modules?status=DRAFT').catch(() => ({ data: { modules: [] } })),
-        api.get('/modules/enrollment-requests/pending').catch(() => ({ data: { requests: [] } })),
+        api.get('/enrollments/creator-queue').catch(() => ({ data: { requests: [] } })),
       ]);
 
       const activeList = modulesRes.data.modules || [];

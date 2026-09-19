@@ -25,6 +25,7 @@ import {
   Download,
   X,
   CheckCheck,
+  CornerUpLeft,
 } from 'lucide-react';
 
 function formatFileSize(bytes) {
@@ -56,6 +57,10 @@ export default function Inbox() {
   const [messages, setMessages] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [selectedContact, setSelectedContact] = useState(null);
+  const [communityThreads, setCommunityThreads] = useState([]);
+  const [selectedCommunityUser, setSelectedCommunityUser] = useState(null);
+  const [communitySearchTerm, setCommunitySearchTerm] = useState('');
+  const [replyingTo, setReplyingTo] = useState(null);
   const [content, setContent] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -63,20 +68,54 @@ export default function Inbox() {
   const [searchTerm, setSearchTerm] = useState('');
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const inputRef = useRef(null);
 
   const isAdmin = user?.role === 'ADMIN';
+  const isModerator = user?.role === 'MODERATOR';
+  const isStaff = isAdmin || isModerator;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Fetch messages based on active tab and selected contact
+  // Fetch community support user threads (for Admin / Moderator view)
+  const fetchCommunityThreads = useCallback(async () => {
+    if (!isStaff) return;
+    try {
+      const { data } = await api.get('/chat/community/threads');
+      const threads = data.threads || [];
+      setCommunityThreads(threads);
+      if (threads.length > 0) {
+        setSelectedCommunityUser((prev) => {
+          if (!prev) return threads[0];
+          const exists = threads.find((t) => t.id === prev.id);
+          return exists || threads[0];
+        });
+      }
+    } catch {
+      setCommunityThreads([]);
+    }
+  }, [isStaff]);
+
+  // Fetch messages based on active tab, selected contact, or selected community thread
   const fetchMessages = useCallback(async () => {
     try {
       setLoading(true);
       let url = `/chat/messages?type=${activeTab === 'AUDIT' ? 'DIRECT' : activeTab}`;
-      if (activeTab === 'DIRECT' && selectedContact) {
+      if (activeTab === 'DIRECT') {
+        if (!selectedContact) {
+          setMessages([]);
+          setLoading(false);
+          return;
+        }
         url += `&contactId=${selectedContact.id}`;
+      } else if (activeTab === 'COMMUNITY' && isStaff) {
+        if (!selectedCommunityUser) {
+          setMessages([]);
+          setLoading(false);
+          return;
+        }
+        url += `&contactId=${selectedCommunityUser.id}`;
       } else if (activeTab === 'AUDIT') {
         url += `&audit=true`;
       }
@@ -87,7 +126,7 @@ export default function Inbox() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, selectedContact]);
+  }, [activeTab, selectedContact, isStaff, selectedCommunityUser]);
 
   // Fetch contacts for 1-on-1 Direct Messaging
   const fetchContacts = useCallback(async () => {
@@ -112,10 +151,12 @@ export default function Inbox() {
   useEffect(() => {
     if (activeTab === 'DIRECT') {
       fetchContacts();
+    } else if (activeTab === 'COMMUNITY' && isStaff) {
+      fetchCommunityThreads();
     }
-  }, [activeTab, fetchContacts]);
+  }, [activeTab, fetchContacts, fetchCommunityThreads, isStaff]);
 
-  // Real-time socket message listeners for instant delivery
+  // Real-time socket message listeners with deduplication and optimistic reconciliation
   useEffect(() => {
     if (!socket) return;
 
@@ -127,7 +168,27 @@ export default function Inbox() {
 
     const handleCommunity = (msg) => {
       if (activeTab === 'COMMUNITY') {
-        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        if (isStaff) {
+          const activeId = selectedCommunityUser?.id;
+          const isForActiveThread = activeId && (msg.senderId === activeId || msg.recipientId === activeId);
+          if (!isForActiveThread) {
+            fetchCommunityThreads();
+            return;
+          }
+        }
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === msg.id)) return prev;
+          // Reconcile optimistic message sent by current user
+          if (msg.senderId === user?.id) {
+            const optIdx = prev.findIndex((m) => m.isOptimistic && m.content === msg.content);
+            if (optIdx !== -1) {
+              const updated = [...prev];
+              updated[optIdx] = msg;
+              return updated;
+            }
+          }
+          return [...prev, msg];
+        });
       }
     };
 
@@ -137,7 +198,18 @@ export default function Inbox() {
           (selectedContact && (msg.senderId === selectedContact.id || msg.recipientId === selectedContact.id)) ||
           msg.senderId === user?.id
         ) {
-          setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === msg.id)) return prev;
+            if (msg.senderId === user?.id) {
+              const optIdx = prev.findIndex((m) => m.isOptimistic && m.content === msg.content);
+              if (optIdx !== -1) {
+                const updated = [...prev];
+                updated[optIdx] = msg;
+                return updated;
+              }
+            }
+            return [...prev, msg];
+          });
         }
       }
       fetchContacts();
@@ -160,13 +232,13 @@ export default function Inbox() {
       socket.off('new_direct_message', handleDirect);
       socket.off('admin_message_audit', handleAudit);
     };
-  }, [socket, activeTab, selectedContact, isAdmin, user?.id, fetchContacts]);
+  }, [socket, activeTab, selectedContact, selectedCommunityUser, isAdmin, isStaff, user?.id, fetchContacts, fetchCommunityThreads]);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  // Send message with instant optimistic UI response and file upload support
+  // Send message with instant optimistic UI response, reply-to reference, and file upload support
   const handleSendMessage = async (e) => {
     e.preventDefault();
     const textToSend = content.trim();
@@ -185,6 +257,28 @@ export default function Inbox() {
         uploadedFileInfo = uploadRes.file;
       }
 
+      const targetRecipientId =
+        activeTab === 'DIRECT'
+          ? selectedContact?.id
+          : activeTab === 'COMMUNITY' && isStaff
+          ? selectedCommunityUser?.id
+          : undefined;
+
+      const targetRecipientName =
+        activeTab === 'DIRECT'
+          ? selectedContact?.name
+          : activeTab === 'COMMUNITY' && isStaff
+          ? selectedCommunityUser?.name
+          : undefined;
+
+      const replySnapshot = replyingTo
+        ? {
+            id: replyingTo.id,
+            senderName: replyingTo.senderName,
+            content: replyingTo.content || replyingTo.fileName || 'Attachment',
+          }
+        : null;
+
       const tempId = `temp-${Date.now()}`;
       const optimisticMessage = {
         id: tempId,
@@ -197,8 +291,9 @@ export default function Inbox() {
         senderId: user?.id,
         senderName: user?.name,
         senderRole: user?.role,
-        recipientId: activeTab === 'DIRECT' ? selectedContact?.id : undefined,
-        recipientName: activeTab === 'DIRECT' ? selectedContact?.name : undefined,
+        recipientId: targetRecipientId,
+        recipientName: targetRecipientName,
+        replyTo: replySnapshot,
         createdAt: new Date().toISOString(),
         isOptimistic: true,
       };
@@ -207,22 +302,31 @@ export default function Inbox() {
       setMessages((prev) => [...prev, optimisticMessage]);
       setContent('');
       setSelectedFile(null);
+      setReplyingTo(null);
 
       const payload = {
         type: activeTab === 'AUDIT' ? 'COMMUNITY' : activeTab,
         content: textToSend,
-        recipientId: activeTab === 'DIRECT' ? selectedContact?.id : undefined,
+        recipientId: targetRecipientId,
         fileUrl: uploadedFileInfo?.fileUrl,
         fileName: uploadedFileInfo?.fileName,
         fileType: uploadedFileInfo?.fileType,
         fileSize: uploadedFileInfo?.fileSize,
+        replyTo: replySnapshot,
       };
 
       const { data } = await api.post('/chat/messages', payload);
-      // Replace optimistic placeholder with real persisted record
-      setMessages((prev) =>
-        prev.map((m) => (m.id === tempId ? data.message : m))
-      );
+      // Reconcile optimistic placeholder without duplicate insertion
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === data.message.id)) {
+          return prev.filter((m) => m.id !== tempId || m.id === data.message.id);
+        }
+        return prev.map((m) => (m.id === tempId ? data.message : m));
+      });
+
+      if (activeTab === 'COMMUNITY' && isStaff) {
+        fetchCommunityThreads();
+      }
     } catch (err) {
       alert(err.response?.data?.message || 'Could not send message.');
     } finally {
@@ -233,6 +337,12 @@ export default function Inbox() {
   const filteredContacts = contacts.filter((c) =>
     c.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.role?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const filteredCommunityThreads = communityThreads.filter((t) =>
+    t.name?.toLowerCase().includes(communitySearchTerm.toLowerCase()) ||
+    t.role?.toLowerCase().includes(communitySearchTerm.toLowerCase()) ||
+    t.lastMessage?.toLowerCase().includes(communitySearchTerm.toLowerCase())
   );
 
   return (
@@ -320,6 +430,70 @@ export default function Inbox() {
           </div>
         )}
 
+        {/* Support Desks Sidebar (Shown for Admin / Moderator in Community Support) */}
+        {activeTab === 'COMMUNITY' && isStaff && (
+          <div className="w-full md:w-80 border-b md:border-b-0 md:border-r border-app flex flex-col bg-elevated/40 shrink-0">
+            <div className="p-3.5 border-b border-app">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-app-muted" />
+                <input
+                  type="text"
+                  placeholder="Search user support threads..."
+                  value={communitySearchTerm}
+                  onChange={(e) => setCommunitySearchTerm(e.target.value)}
+                  className="w-full h-8 pl-8 pr-3 text-xs rounded-btn bg-elevated border border-app text-app focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto divide-y divide-app/40 max-h-[460px] scrollbar-thin">
+              {filteredCommunityThreads.map((thread) => {
+                const isSelected = selectedCommunityUser?.id === thread.id;
+                return (
+                  <button
+                    key={thread.id}
+                    type="button"
+                    onClick={() => setSelectedCommunityUser(thread)}
+                    className={`w-full p-3 text-left flex items-center gap-3 transition-colors ${
+                      isSelected
+                        ? 'bg-blue-50/70 dark:bg-slate-800/80 border-l-4 border-l-blue-600'
+                        : 'hover:bg-elevated'
+                    }`}
+                  >
+                    <Avatar name={thread.name} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-bold text-app truncate">{thread.name}</p>
+                        <span className="text-[10px] font-mono text-app-muted">
+                          {new Date(thread.lastMessageAt).toLocaleTimeString([], {
+                            hour: 'numeric',
+                            minute: '2-digit',
+                            hour12: true,
+                          })}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between mt-0.5">
+                        <p className="text-[11px] text-app-secondary truncate flex-1 mr-2">
+                          {thread.lastMessage}
+                        </p>
+                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-elevated border border-app text-app-muted uppercase shrink-0">
+                          {thread.role}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+
+              {filteredCommunityThreads.length === 0 && (
+                <div className="p-6 text-center text-xs text-app-muted">
+                  No support tickets found.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Active Conversation Feed */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Conversation Channel Header */}
@@ -338,15 +512,36 @@ export default function Inbox() {
               )}
 
               {activeTab === 'COMMUNITY' && (
-                <>
-                  <div className="p-1.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
-                    <Users className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <h3 className="text-xs sm:text-sm font-bold text-app">Community Support Desk</h3>
-                    <p className="text-[11px] text-app-muted">Direct assistance between you and platform staff (Admin & Moderator)</p>
-                  </div>
-                </>
+                isStaff ? (
+                  <>
+                    <Avatar name={selectedCommunityUser?.name || 'User'} size="sm" />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xs sm:text-sm font-bold text-app">
+                          {selectedCommunityUser ? selectedCommunityUser.name : 'Select user thread'}
+                        </h3>
+                        {selectedCommunityUser && (
+                          <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 uppercase">
+                            {selectedCommunityUser.role}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-app-muted">
+                        3-Party Desk • {selectedCommunityUser?.name || 'User'}, Admin & Moderator
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="p-1.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
+                      <Users className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs sm:text-sm font-bold text-app">Community Support Desk</h3>
+                      <p className="text-[11px] text-app-muted">Direct assistance between you and platform staff (Admin & Moderator)</p>
+                    </div>
+                  </>
+                )
               )}
 
               {activeTab === 'DIRECT' && (
@@ -401,7 +596,7 @@ export default function Inbox() {
               return (
                 <div
                   key={msg.id}
-                  className={`flex flex-col ${isMe && activeTab !== 'AUDIT' ? 'items-end' : 'items-start'} space-y-1`}
+                  className={`flex flex-col ${isMe && activeTab !== 'AUDIT' ? 'items-end' : 'items-start'} space-y-1 group relative`}
                 >
                   {/* Sender & Role Info (only on received messages, or in audit compliance) */}
                   {(!isMe || activeTab === 'AUDIT') && (
@@ -418,77 +613,111 @@ export default function Inbox() {
                     </div>
                   )}
 
-                  {/* Compact, Proportional Bubble */}
-                  <div
-                    className={`px-3.5 py-2 rounded-2xl text-xs shadow-xs leading-relaxed max-w-[85%] sm:max-w-md ${
-                      isMe && activeTab !== 'AUDIT'
-                        ? 'bg-blue-600 text-white rounded-tr-xs'
-                        : 'bg-elevated border border-app text-app rounded-tl-xs'
-                    }`}
-                  >
-                    {/* Attachment preview if present */}
-                    {msg.fileUrl && (
-                      <div className="mb-2">
-                        {msg.fileType?.startsWith('image/') ? (
-                          <a
-                            href={msg.fileUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block rounded-lg overflow-hidden border border-white/20 hover:opacity-95 transition-opacity"
-                          >
-                            <img
-                              src={msg.fileUrl}
-                              alt={msg.fileName || 'Attachment'}
-                              className="max-h-60 w-full object-cover rounded-md"
-                            />
-                          </a>
-                        ) : (
-                          <a
-                            href={msg.fileUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            download={msg.fileName}
-                            className={`flex items-center gap-2.5 p-2.5 rounded-lg border transition-all ${
-                              isMe && activeTab !== 'AUDIT'
-                                ? 'bg-blue-700/60 border-blue-400/30 text-white hover:bg-blue-700'
-                                : 'bg-surface dark:bg-dark-surface border-app text-app hover:border-brand-500/50'
-                            }`}
-                          >
-                            <div className="p-2 rounded-md bg-black/10 dark:bg-white/10 shrink-0">
-                              <FileText className="h-5 w-5" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-xs truncate">
-                                {msg.fileName || 'Document'}
-                              </p>
-                              <p className="text-[10px] opacity-75 font-mono">
-                                {formatFileSize(msg.fileSize)}
-                              </p>
-                            </div>
-                            <Download className="h-4 w-4 shrink-0 opacity-80 hover:opacity-100" />
-                          </a>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Content & Inline Timestamp */}
-                    <div className="flex items-end justify-between gap-3 flex-wrap">
-                      {msg.content && (
-                        <span className="whitespace-pre-wrap break-words text-xs leading-relaxed flex-1 min-w-[60px]">
-                          {msg.content}
-                        </span>
+                  {/* Message Bubble Row with Hover Reply Action */}
+                  <div className={`flex items-center gap-1.5 max-w-[85%] sm:max-w-md ${isMe && activeTab !== 'AUDIT' ? 'flex-row-reverse' : 'flex-row'}`}>
+                    {/* Compact Bubble */}
+                    <div
+                      className={`px-3.5 py-2 rounded-2xl text-xs shadow-xs leading-relaxed flex-1 ${
+                        isMe && activeTab !== 'AUDIT'
+                          ? 'bg-blue-600 text-white rounded-tr-xs'
+                          : 'bg-elevated border border-app text-app rounded-tl-xs'
+                      }`}
+                    >
+                      {/* Quoted Reply Preview */}
+                      {msg.replyTo && (
+                        <div
+                          className={`mb-1.5 pl-2.5 py-1 rounded text-[11px] border-l-2 ${
+                            isMe && activeTab !== 'AUDIT'
+                              ? 'bg-blue-700/50 border-blue-200 text-blue-100'
+                              : 'bg-black/5 dark:bg-white/5 border-blue-500 text-app-secondary'
+                          }`}
+                        >
+                          <span className="font-bold block text-[10px] uppercase tracking-wider">
+                            {msg.replyTo.senderName}
+                          </span>
+                          <span className="line-clamp-1 opacity-80">{msg.replyTo.content}</span>
+                        </div>
                       )}
-                      <span
-                        className={`inline-flex items-center gap-1 text-[10px] font-mono shrink-0 ml-auto select-none ${
-                          isMe && activeTab !== 'AUDIT' ? 'text-blue-200/90' : 'text-app-muted'
-                        }`}
-                      >
-                        {formattedTime}
-                        {isMe && activeTab !== 'AUDIT' && (
-                          <CheckCheck className="h-3 w-3 inline text-blue-200" />
+
+                      {/* Attachment preview if present */}
+                      {msg.fileUrl && (
+                        <div className="mb-2">
+                          {msg.fileType?.startsWith('image/') ? (
+                            <a
+                              href={msg.fileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block rounded-lg overflow-hidden border border-white/20 hover:opacity-95 transition-opacity"
+                            >
+                              <img
+                                src={msg.fileUrl}
+                                alt={msg.fileName || 'Attachment'}
+                                className="max-h-60 w-full object-cover rounded-md"
+                              />
+                            </a>
+                          ) : (
+                            <a
+                              href={msg.fileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download={msg.fileName}
+                              className={`flex items-center gap-2.5 p-2.5 rounded-lg border transition-all ${
+                                isMe && activeTab !== 'AUDIT'
+                                  ? 'bg-blue-700/60 border-blue-400/30 text-white hover:bg-blue-700'
+                                  : 'bg-surface dark:bg-dark-surface border-app text-app hover:border-brand-500/50'
+                              }`}
+                            >
+                              <div className="p-2 rounded-md bg-black/10 dark:bg-white/10 shrink-0">
+                                <FileText className="h-5 w-5" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="font-semibold text-xs truncate">
+                                  {msg.fileName || 'Document'}
+                                </p>
+                                <p className="text-[10px] opacity-75 font-mono">
+                                  {formatFileSize(msg.fileSize)}
+                                </p>
+                              </div>
+                              <Download className="h-4 w-4 shrink-0 opacity-80 hover:opacity-100" />
+                            </a>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Content & Inline Timestamp */}
+                      <div className="flex items-end justify-between gap-3 flex-wrap">
+                        {msg.content && (
+                          <span className="whitespace-pre-wrap break-words text-xs leading-relaxed flex-1 min-w-[60px]">
+                            {msg.content}
+                          </span>
                         )}
-                      </span>
+                        <span
+                          className={`inline-flex items-center gap-1 text-[10px] font-mono shrink-0 ml-auto select-none ${
+                            isMe && activeTab !== 'AUDIT' ? 'text-blue-200/90' : 'text-app-muted'
+                          }`}
+                        >
+                          {formattedTime}
+                          {isMe && activeTab !== 'AUDIT' && (
+                            <CheckCheck className="h-3 w-3 inline text-blue-200" />
+                          )}
+                        </span>
+                      </div>
                     </div>
+
+                    {/* Subtle Hover Reply Action Button */}
+                    {activeTab !== 'AUDIT' && !(activeTab === 'ANNOUNCEMENT' && !isAdmin) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplyingTo(msg);
+                          inputRef.current?.focus();
+                        }}
+                        title="Reply to message"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-app-muted hover:text-blue-500 hover:bg-elevated rounded-md shrink-0"
+                      >
+                        <CornerUpLeft className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -518,6 +747,29 @@ export default function Inbox() {
               </div>
             ) : (
               <form onSubmit={handleSendMessage} className="space-y-2">
+                {/* Replying To Banner */}
+                {replyingTo && (
+                  <div className="flex items-center justify-between px-3 py-1.5 rounded-btn bg-elevated border-l-2 border-blue-500 text-xs text-app animate-fade-in">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <CornerUpLeft className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                      <span className="font-semibold text-app shrink-0">
+                        Replying to {replyingTo.senderName}:
+                      </span>
+                      <span className="text-app-muted truncate">
+                        {replyingTo.content || replyingTo.fileName || 'Attachment'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setReplyingTo(null)}
+                      className="p-1 hover:text-app text-app-muted transition-colors"
+                      title="Cancel reply"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+
                 {/* File Attachment Staging Preview */}
                 {selectedFile && (
                   <div className="flex items-center justify-between px-3 py-1.5 bg-elevated border border-brand-500/30 rounded-btn text-xs text-app animate-fade-in">
@@ -563,6 +815,7 @@ export default function Inbox() {
 
                   <input
                     type="text"
+                    ref={inputRef}
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
                     placeholder={
@@ -570,6 +823,8 @@ export default function Inbox() {
                         ? 'Broadcast a platform announcement to all users...'
                         : activeTab === 'DIRECT'
                         ? `Message ${selectedContact?.name || 'user'} directly...`
+                        : isStaff
+                        ? `Reply in ${selectedCommunityUser?.name || 'user'}'s support thread...`
                         : 'Message platform staff (Admin & Moderator) for support...'
                     }
                     className="flex-1 h-10 px-3.5 text-xs rounded-btn bg-elevated border border-app text-app focus:ring-1 focus:ring-blue-500"

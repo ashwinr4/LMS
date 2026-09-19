@@ -303,6 +303,26 @@ export async function getMyExams(req, res) {
     const assignmentMap = {};
     assignments.forEach((a) => { assignmentMap[a.moduleId] = a; });
 
+    // Ensure modules are resolved even when relations are not pre-joined (e.g. MongoDB)
+    const modules = await prisma.module.findMany({
+      where: { id: { in: enrolledModuleIds } },
+      select: { id: true, code: true, title: true, department: true },
+    });
+    const moduleMap = {};
+    modules.forEach((m) => { moduleMap[m.id] = m; });
+
+    // Ensure user submissions are resolved across all databases
+    const assessmentIds = assessments.map((a) => a.id);
+    const submissions = await prisma.assessmentSubmission.findMany({
+      where: { userId, assessmentId: { in: assessmentIds } },
+      orderBy: { submittedAt: 'desc' },
+    });
+    const subMap = {};
+    submissions.forEach((s) => {
+      if (!subMap[s.assessmentId]) subMap[s.assessmentId] = [];
+      subMap[s.assessmentId].push(s);
+    });
+
     // Also check if certificate exists for module
     const certificates = await prisma.certificate.findMany({
       where: { userId },
@@ -315,7 +335,11 @@ export async function getMyExams(req, res) {
       success: true,
       exams: assessments.map((a) => {
         const assignment = assignmentMap[a.moduleId];
-        const lastSubmission = a.submissions[0] || null;
+        const mod = a.module || moduleMap[a.moduleId] || {};
+        const subs = (Array.isArray(a.submissions) && a.submissions.length > 0)
+          ? a.submissions
+          : (subMap[a.id] || []);
+        const lastSubmission = subs[0] || null;
         const progress = assignment?.progress || 0;
         const cert = certMap[a.moduleId] || null;
         const isUnlocked = progress >= 80;
@@ -357,9 +381,9 @@ export async function getMyExams(req, res) {
         return {
           id: a.id,
           moduleId: a.moduleId,
-          moduleCode: a.module?.code,
-          moduleTitle: a.module?.title,
-          department: a.module?.department,
+          moduleCode: mod.code || a.module?.code || '',
+          moduleTitle: mod.title || a.module?.title || '',
+          department: mod.department || a.module?.department || '',
           title: a.title,
           description: a.description,
           passingScore: a.passingScore,

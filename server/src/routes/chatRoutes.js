@@ -7,6 +7,7 @@ import {
   postMessage,
   uploadChatFile,
   getContacts,
+  getCommunityThreads,
   getUnreadCount,
   markAnnouncementsRead,
   getNotifications,
@@ -42,6 +43,7 @@ router.get('/messages', getMessages);
 router.post('/messages', postMessage);
 router.post('/upload', upload.single('file'), uploadChatFile);
 router.get('/contacts', getContacts);
+router.get('/community/threads', getCommunityThreads);
 router.get('/unread-count', getUnreadCount);
 router.post('/read-announcements', markAnnouncementsRead);
 router.get('/notifications', getNotifications);

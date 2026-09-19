@@ -170,7 +170,7 @@ export async function uploadChatFile(req, res) {
  */
 export async function postMessage(req, res) {
   try {
-    const { type, content, recipientId, fileUrl, fileName, fileType, fileSize } = req.body;
+    const { type, content, recipientId, fileUrl, fileName, fileType, fileSize, replyTo } = req.body;
     const user = req.user;
 
     const trimmedContent = content?.trim() || '';
@@ -191,17 +191,16 @@ export async function postMessage(req, res) {
     }
 
     let targetUser = null;
-    if (type === 'DIRECT') {
-      if (!recipientId) {
-        return res.status(400).json({ success: false, error: 'MISSING_RECIPIENT', message: 'Recipient is required for 1-on-1 direct messaging.' });
-      }
+    if (recipientId) {
       targetUser = await prisma.user.findUnique({
         where: { id: recipientId },
         select: { id: true, name: true, role: true },
       });
-      if (!targetUser) {
+      if (!targetUser && type === 'DIRECT') {
         return res.status(404).json({ success: false, error: 'USER_NOT_FOUND', message: 'Recipient not found.' });
       }
+    } else if (type === 'DIRECT') {
+      return res.status(400).json({ success: false, error: 'MISSING_RECIPIENT', message: 'Recipient is required for 1-on-1 direct messaging.' });
     }
 
     const sanitizedContent = trimmedContent ? xss(trimmedContent) : (fileName || 'Attachment');
@@ -221,6 +220,11 @@ export async function postMessage(req, res) {
         fileName: fileName || null,
         fileType: fileType || null,
         fileSize: fileSize ? Number(fileSize) : null,
+        replyTo: replyTo && replyTo.content ? {
+          id: replyTo.id,
+          senderName: replyTo.senderName,
+          content: replyTo.content,
+        } : null,
       },
     });
 
@@ -253,6 +257,83 @@ export async function postMessage(req, res) {
 }
 
 /**
+ * GET /api/v1/chat/community/threads
+ * Returns list of user support threads for Staff (Admin/Moderator)
+ */
+export async function getCommunityThreads(req, res) {
+  try {
+    const userRole = req.user.role;
+    if (userRole !== 'ADMIN' && userRole !== 'MODERATOR') {
+      return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Staff access required.' });
+    }
+
+    const messages = await prisma.chatMessage.findMany({
+      where: { type: 'COMMUNITY' },
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+    });
+
+    const threadMap = new Map();
+
+    for (const msg of messages) {
+      let threadUserId = null;
+      let threadUserName = null;
+      let threadUserRole = null;
+
+      if (msg.senderRole !== 'ADMIN' && msg.senderRole !== 'MODERATOR') {
+        threadUserId = msg.senderId;
+        threadUserName = msg.senderName;
+        threadUserRole = msg.senderRole;
+      } else if (msg.recipientId) {
+        threadUserId = msg.recipientId;
+        threadUserName = msg.recipientName || 'User';
+        threadUserRole = msg.recipientRole || 'USER';
+      }
+
+      if (!threadUserId) continue;
+
+      if (!threadMap.has(threadUserId)) {
+        threadMap.set(threadUserId, {
+          id: threadUserId,
+          name: threadUserName,
+          role: threadUserRole,
+          lastMessage: msg.content || msg.fileName || 'Attachment',
+          lastSenderName: msg.senderName,
+          lastMessageAt: msg.createdAt,
+          unread: !msg.read && msg.senderRole !== 'ADMIN' && msg.senderRole !== 'MODERATOR',
+        });
+      }
+    }
+
+    const userIds = Array.from(threadMap.keys());
+    if (userIds.length > 0) {
+      const users = await prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: { id: true, name: true, role: true, avatar: true, department: true },
+      });
+      const uMap = new Map(users.map((u) => [u.id, u]));
+      for (const [id, th] of threadMap.entries()) {
+        const u = uMap.get(id);
+        if (u) {
+          th.name = u.name || th.name;
+          th.role = u.role || th.role;
+          th.avatar = u.avatar || null;
+          th.department = u.department || null;
+        }
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      threads: Array.from(threadMap.values()),
+    });
+  } catch (error) {
+    logger.error(`Get Community Threads Error: ${error.message}`);
+    return res.status(500).json({ success: false, error: 'THREADS_FAILED', message: error.message });
+  }
+}
+
+/**
  * GET /api/v1/chat/contacts
  * Returns safe list of active platform members for 1-on-1 direct messaging (name, role, avatar only)
  */
@@ -260,14 +341,11 @@ export async function getContacts(req, res) {
   try {
     const user = req.user;
     
-    // Filter contacts: Non-admins cannot see administrator accounts
+    // Allow all active platform members (excluding current user)
     const contactWhere = {
       id: { not: user.id },
       status: 'ACTIVE',
     };
-    if (user.role !== 'ADMIN') {
-      contactWhere.role = { not: 'ADMIN' };
-    }
 
     const contacts = await prisma.user.findMany({
       where: contactWhere,

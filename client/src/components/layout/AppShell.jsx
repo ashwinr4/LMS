@@ -563,7 +563,14 @@ export function AppShell() {
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setNotificationsOpen((prev) => !prev)}
+                onClick={() => {
+                  const next = !notificationsOpen;
+                  setNotificationsOpen(next);
+                  if (next && unreadNotificationsCount > 0) {
+                    api.patch('/notifications/read-all').catch(() => {});
+                    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+                  }
+                }}
                 className="p-2 rounded-full text-app-secondary hover:text-app hover:bg-slate-200/60 dark:hover:bg-slate-800/70 transition-colors relative group"
               >
                 <Bell className="h-4 w-4 text-app-secondary" />

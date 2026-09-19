@@ -187,26 +187,15 @@ export default function Assessments() {
                         : `Cooldown (${exam.cooldown.formattedTime})`}
                     </Button>
                   ) : hasPassed ? (
-                    <>
-                      <Button
-                        variant="primary"
-                        size="md"
-                        leftIcon={<Award className="h-4 w-4" />}
-                        onClick={() => navigate('/certificates')}
-                        className="w-full"
-                      >
-                        View Certificate
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        leftIcon={<Eye className="h-3.5 w-3.5" />}
-                        onClick={() => handleStartExam(exam)}
-                        className="w-full"
-                      >
-                        Retake Exam
-                      </Button>
-                    </>
+                    <Button
+                      variant="primary"
+                      size="md"
+                      leftIcon={<Award className="h-4 w-4" />}
+                      onClick={() => navigate('/certificates')}
+                      className="w-full"
+                    >
+                      View Certificate
+                    </Button>
                   ) : exam.isUnlocked ? (
                     <Button
                       variant="primary"

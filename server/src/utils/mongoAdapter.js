@@ -45,6 +45,10 @@ function translateWhere(where = {}) {
           filter.$or = [{ id: { $in: val.in } }, { _id: { $in: val.in } }];
           continue;
         }
+        if (val.not !== undefined) {
+          filter.$and = [{ id: { $ne: val.not } }, { _id: { $ne: val.not } }];
+          continue;
+        }
       }
       filter.$or = [{ id: val }, { _id: val }];
       continue;
