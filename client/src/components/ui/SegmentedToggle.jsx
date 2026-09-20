@@ -137,6 +137,9 @@ export function SegmentedToggle({
               </span>
             )}
             <span>{opt.label}</span>
+            {opt.hasBadge && (
+              <span className="h-2 w-2 rounded-full bg-red-500 shrink-0 ring-1 ring-white/30" />
+            )}
             {opt.count !== undefined && (
               <span
                 className={cn(

@@ -124,6 +124,32 @@ export async function getMessages(req, res) {
         },
         data: { read: true },
       });
+    } else if (type === 'COMMUNITY') {
+      if (userRole === 'ADMIN' || userRole === 'MODERATOR') {
+        if (contactId) {
+          await prisma.chatMessage.updateMany({
+            where: {
+              type: 'COMMUNITY',
+              senderId: contactId,
+              read: false,
+            },
+            data: { read: true },
+          });
+        }
+      } else {
+        await prisma.chatMessage.updateMany({
+          where: {
+            type: 'COMMUNITY',
+            senderRole: { in: ['ADMIN', 'MODERATOR'] },
+            OR: [
+              { recipientId: userId },
+              { recipientId: null },
+            ],
+            read: false,
+          },
+          data: { read: true },
+        });
+      }
     } else if (type === 'ANNOUNCEMENT') {
       await setLastAnnouncementRead(userId);
     }
@@ -225,6 +251,7 @@ export async function postMessage(req, res) {
           senderName: replyTo.senderName,
           content: replyTo.content,
         } : null,
+        read: false,
       },
     });
 
@@ -234,6 +261,11 @@ export async function postMessage(req, res) {
         io.emit('new_announcement', message);
       } else if (type === 'COMMUNITY') {
         io.emit('new_community_message', message);
+        if (recipientId) {
+          io.to(`user_${recipientId}`).emit('new_community_message', message);
+        }
+        io.to('role_ADMIN').emit('new_community_message', message);
+        io.to('role_MODERATOR').emit('new_community_message', message);
       } else if (type === 'DIRECT') {
         // Send to recipient's private user room
         io.to(`user_${recipientId}`).emit('new_direct_message', message);
@@ -302,6 +334,11 @@ export async function getCommunityThreads(req, res) {
           lastMessageAt: msg.createdAt,
           unread: !msg.read && msg.senderRole !== 'ADMIN' && msg.senderRole !== 'MODERATOR',
         });
+      } else {
+        const th = threadMap.get(threadUserId);
+        if (!th.unread && !msg.read && msg.senderRole !== 'ADMIN' && msg.senderRole !== 'MODERATOR') {
+          th.unread = true;
+        }
       }
     }
 
@@ -354,9 +391,29 @@ export async function getContacts(req, res) {
       take: 100,
     });
 
+    // Query unread direct messages sent to current user
+    const unreadMessages = await prisma.chatMessage.findMany({
+      where: {
+        type: 'DIRECT',
+        recipientId: user.id,
+        read: false,
+      },
+      select: { senderId: true },
+    });
+
+    const unreadCountBySender = {};
+    for (const m of unreadMessages) {
+      unreadCountBySender[m.senderId] = (unreadCountBySender[m.senderId] || 0) + 1;
+    }
+
+    const contactsWithUnread = contacts.map((c) => ({
+      ...c,
+      unreadCount: unreadCountBySender[c.id] || 0,
+    }));
+
     return res.status(200).json({
       success: true,
-      contacts,
+      contacts: contactsWithUnread,
     });
   } catch (error) {
     logger.error(`Get Chat Contacts Error: ${error.message}`);
@@ -366,11 +423,13 @@ export async function getContacts(req, res) {
 
 /**
  * GET /api/v1/chat/unread-count
- * Returns badge count for unread direct messages and new announcements
+ * Returns badge count for unread direct messages, announcements, and support desk tickets
  */
 export async function getUnreadCount(req, res) {
   try {
     const userId = req.user.id;
+    const userRole = req.user.role;
+    const isStaff = userRole === 'ADMIN' || userRole === 'MODERATOR';
 
     // 1. Unread direct messages
     const directCount = await prisma.chatMessage.count({
@@ -401,16 +460,41 @@ export async function getUnreadCount(req, res) {
       });
     }
 
-    const count = directCount + announcementCount;
+    // 3. Unread community support messages (seen only when viewed)
+    let communityCount = 0;
+    if (isStaff) {
+      communityCount = await prisma.chatMessage.count({
+        where: {
+          type: 'COMMUNITY',
+          senderRole: { notIn: ['ADMIN', 'MODERATOR'] },
+          read: false,
+        },
+      });
+    } else {
+      communityCount = await prisma.chatMessage.count({
+        where: {
+          type: 'COMMUNITY',
+          senderRole: { in: ['ADMIN', 'MODERATOR'] },
+          OR: [
+            { recipientId: userId },
+            { recipientId: null },
+          ],
+          read: false,
+        },
+      });
+    }
+
+    const count = directCount + announcementCount + communityCount;
 
     return res.status(200).json({
       success: true,
       count,
       directCount,
       announcementCount,
+      communityCount,
     });
   } catch (error) {
-    return res.status(200).json({ success: true, count: 0, directCount: 0, announcementCount: 0 });
+    return res.status(200).json({ success: true, count: 0, directCount: 0, announcementCount: 0, communityCount: 0 });
   }
 }
 
@@ -430,59 +514,92 @@ export async function markAnnouncementsRead(req, res) {
 
 /**
  * GET /api/v1/chat/notifications
- * Returns list of recent notifications for the bell icon dropdown
+ * Returns list of recent messages across Announcements, Support Desk, and Direct Messages for the Mailbox dropdown
  */
 export async function getNotifications(req, res) {
   try {
     const userId = req.user.id;
-    const lastViewed = (await getLastAnnouncementRead(userId)) || (req.user.createdAt ? new Date(req.user.createdAt) : new Date());
+    const userRole = req.user.role;
+    const isStaff = userRole === 'ADMIN' || userRole === 'MODERATOR';
+    const lastViewed = (await getLastAnnouncementRead(userId)) || (req.user.createdAt ? new Date(req.user.createdAt) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
 
-    // Fetch recent announcements
+    // 1. Recent global announcements
     const recentAnnouncements = await prisma.chatMessage.findMany({
       where: { type: 'ANNOUNCEMENT' },
       orderBy: { createdAt: 'desc' },
-      take: 5,
+      take: 4,
     });
 
-    // Fetch recent unread direct messages
+    // 2. Recent community support desk messages
+    let commWhere = { type: 'COMMUNITY' };
+    if (!isStaff) {
+      commWhere = {
+        type: 'COMMUNITY',
+        OR: [{ recipientId: userId }, { senderId: userId }],
+      };
+    }
+    const recentCommunity = await prisma.chatMessage.findMany({
+      where: commWhere,
+      orderBy: { createdAt: 'desc' },
+      take: 4,
+    });
+
+    // 3. Recent 1-on-1 direct messages
     const recentDMs = await prisma.chatMessage.findMany({
       where: {
         type: 'DIRECT',
-        recipientId: userId,
-        read: false,
+        OR: [{ recipientId: userId }, { senderId: userId }],
       },
       orderBy: { createdAt: 'desc' },
-      take: 5,
+      take: 4,
     });
 
-    const notifications = [
+    const items = [
       ...recentAnnouncements.map((a) => ({
         id: a.id,
-        title: `Announcement by ${a.senderName}`,
-        message: a.content,
-        type: 'ANNOUNCEMENT',
+        senderName: a.senderName,
+        senderRole: a.senderRole,
+        title: `Announcement: ${a.senderName}`,
+        message: a.content || a.fileName || 'Attachment',
+        channelType: 'ANNOUNCEMENT',
+        link: '/inbox?tab=ANNOUNCEMENT',
         read: new Date(a.createdAt) <= new Date(lastViewed),
         createdAt: a.createdAt,
       })),
+      ...recentCommunity.map((c) => ({
+        id: c.id,
+        senderName: c.senderName,
+        senderRole: c.senderRole,
+        title: `Support Desk: ${c.senderName}`,
+        message: c.content || c.fileName || 'Attachment',
+        channelType: 'COMMUNITY',
+        link: '/inbox?tab=COMMUNITY',
+        read: c.senderId === userId ? true : c.read,
+        createdAt: c.createdAt,
+      })),
       ...recentDMs.map((dm) => ({
         id: dm.id,
-        title: `Direct Message: ${dm.senderName}`,
-        message: dm.content,
-        type: 'DIRECT',
-        read: false,
+        senderName: dm.senderName,
+        senderRole: dm.senderRole,
+        title: `Direct: ${dm.senderName}`,
+        message: dm.content || dm.fileName || 'Attachment',
+        channelType: 'DIRECT',
+        link: '/inbox?tab=DIRECT',
+        read: dm.senderId === userId ? true : dm.read,
         createdAt: dm.createdAt,
       })),
     ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 10);
 
-    const unreadCount = notifications.filter((n) => !n.read).length;
+    const unreadCount = items.filter((item) => !item.read).length;
 
     return res.status(200).json({
       success: true,
-      notifications,
+      messages: items,
+      notifications: items,
       unreadCount,
     });
   } catch (error) {
-    logger.error(`Get Notifications Error: ${error.message}`);
-    return res.status(200).json({ success: true, notifications: [], unreadCount: 0 });
+    logger.error(`Get Inbox Recent Messages Error: ${error.message}`);
+    return res.status(200).json({ success: true, messages: [], notifications: [], unreadCount: 0 });
   }
 }

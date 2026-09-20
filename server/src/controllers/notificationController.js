@@ -12,9 +12,11 @@ export async function getNotifications(req, res) {
     const limit = Math.min(Number(req.query.limit) || 20, 50);
 
     const where = {
+      type: { notIn: ['ANNOUNCEMENT', 'COMMUNITY_SUPPORT', 'DIRECT_MESSAGE', 'LAST_ANNOUNCEMENT_READ'] },
       OR: [
         { recipientId: userId },
         { targetRole: userRole },
+        { targetRole: 'ALL' },
       ],
     };
 
@@ -62,7 +64,12 @@ export async function markAsRead(req, res) {
     }
 
     // Verify user ownership or role authorization
-    if (notification.recipientId && notification.recipientId !== userId && notification.targetRole !== userRole) {
+    if (
+      notification.recipientId &&
+      notification.recipientId !== userId &&
+      notification.targetRole !== userRole &&
+      notification.targetRole !== 'ALL'
+    ) {
       return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
 
@@ -92,9 +99,11 @@ export async function markAllAsRead(req, res) {
 
     await prisma.notification.updateMany({
       where: {
+        type: { notIn: ['ANNOUNCEMENT', 'COMMUNITY_SUPPORT', 'DIRECT_MESSAGE', 'LAST_ANNOUNCEMENT_READ'] },
         OR: [
           { recipientId: userId },
           { targetRole: userRole },
+          { targetRole: 'ALL' },
         ],
         isRead: false,
       },

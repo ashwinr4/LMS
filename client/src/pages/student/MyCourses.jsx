@@ -45,6 +45,8 @@ export default function MyCourses() {
       }
     }
     loadAssignments();
+    window.addEventListener('app_sync', loadAssignments);
+    return () => window.removeEventListener('app_sync', loadAssignments);
   }, []);
 
   const formatDueDate = (dateStr) => {

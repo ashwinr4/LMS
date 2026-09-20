@@ -91,23 +91,32 @@ export async function listAssessments(req, res) {
     return res.status(200).json({
       success: true,
       count: assessments.length,
-      assessments: assessments.map((a) => ({
-        id: a.id,
-        moduleId: a.moduleId,
-        moduleCode: a.module?.code,
-        moduleTitle: a.module?.title,
-        department: a.module?.department,
-        title: a.title,
-        description: a.description,
-        passingScore: a.passingScore,
-        sampleSize: a.sampleSize,
-        durationMinutes: a.durationMinutes,
-        randomizeQuestions: a.randomizeQuestions,
-        questionCount: JSON.parse(a.questions || '[]').length,
-        submissionCount: a._count.submissions,
-        status: a.status,
-        createdAt: a.createdAt,
-      })),
+      assessments: assessments.map((a) => {
+        let questionCount = 0;
+        try {
+          const parsed = typeof a.questions === 'string' ? JSON.parse(a.questions || '[]') : (a.questions || []);
+          questionCount = Array.isArray(parsed) ? parsed.length : 0;
+        } catch {
+          questionCount = 0;
+        }
+        return {
+          id: a.id,
+          moduleId: a.moduleId,
+          moduleCode: a.module?.code || 'N/A',
+          moduleTitle: a.module?.title || 'Course Module',
+          department: a.module?.department || '',
+          title: a.title,
+          description: a.description || '',
+          passingScore: a.passingScore ?? 75,
+          sampleSize: a.sampleSize ?? 5,
+          durationMinutes: a.durationMinutes ?? 30,
+          randomizeQuestions: a.randomizeQuestions ?? true,
+          questionCount,
+          submissionCount: a._count?.submissions ?? (Array.isArray(a.submissions) ? a.submissions.length : 0),
+          status: a.status || 'PUBLISHED',
+          createdAt: a.createdAt,
+        };
+      }),
     });
   } catch (error) {
     logger.error(`List Assessments Error: ${error.message}`);

@@ -11,6 +11,7 @@ async function main() {
   await prisma.notification.deleteMany({});
   await prisma.activeSession.deleteMany({});
   await prisma.courseEnrollmentRequest.deleteMany({});
+  await prisma.transferRequest.deleteMany({});
   await prisma.assignment.deleteMany({});
   await prisma.lesson.deleteMany({});
   await prisma.section.deleteMany({});

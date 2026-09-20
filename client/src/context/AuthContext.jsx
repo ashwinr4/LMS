@@ -36,14 +36,20 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const handleStorageChange = (e) => {
       if (e.key === STORAGE_KEYS.USER) {
-        setUser(secureStorage.getJSON(STORAGE_KEYS.USER));
+        const storedUser = secureStorage.getJSON(STORAGE_KEYS.USER);
+        if (storedUser) {
+          setUser(storedUser);
+        } else if (e.newValue === null) {
+          setUser(null);
+        }
       }
       if (e.key === STORAGE_KEYS.TOKEN) {
         const decrypted = secureStorage.getItem(STORAGE_KEYS.TOKEN);
-        setAccessToken(decrypted);
         if (decrypted) {
+          setAccessToken(decrypted);
           api.defaults.headers.common.Authorization = `Bearer ${decrypted}`;
-        } else {
+        } else if (e.newValue === null) {
+          setAccessToken(null);
           delete api.defaults.headers.common.Authorization;
         }
       }
@@ -80,7 +86,17 @@ export function AuthProvider({ children }) {
           }
         }
       } else {
-        clearAuth();
+        // No local token in storage - check if a valid session cookie exists before giving up
+        try {
+          const { data } = await api.post('/auth/refresh');
+          if (data.accessToken && data.user) {
+            saveAuth(data.user, data.accessToken);
+          } else {
+            clearAuth();
+          }
+        } catch {
+          clearAuth();
+        }
       }
       setLoading(false);
     }

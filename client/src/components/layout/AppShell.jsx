@@ -49,6 +49,8 @@ export function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [mailboxOpen, setMailboxOpen] = useState(false);
+  const [recentMessages, setRecentMessages] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const [passwordResetRequestsCount, setPasswordResetRequestsCount] = useState(0);
@@ -57,6 +59,15 @@ export function AppShell() {
 
   const userRole = user?.role || 'USER';
   const unreadNotificationsCount = notifications.filter((n) => !n.isRead).length;
+
+  const fetchRecentMessages = useCallback(async () => {
+    try {
+      const { data } = await api.get('/chat/notifications');
+      setRecentMessages(data.messages || data.notifications || []);
+    } catch {
+      setRecentMessages([]);
+    }
+  }, []);
 
   const fetchBadgeCounts = useCallback(async () => {
     try {
@@ -77,23 +88,25 @@ export function AppShell() {
     }
   }, [userRole]);
 
+  const fetchUnreadMessagesCount = useCallback(async () => {
+    try {
+      const msgRes = await api.get('/chat/unread-count').catch(() => ({ data: { count: 0 } }));
+      if (msgRes.data) {
+        setUnreadMessagesCount(msgRes.data.count || 0);
+      }
+    } catch {
+      // silent fail
+    }
+  }, []);
+
   // Initial fetch for badges, unread message badges, and system notifications
   useEffect(() => {
     let mounted = true;
     async function fetchInitialData() {
       try {
         await fetchBadgeCounts();
-
-        // 2. Unread direct messages & announcements for Mail icon
-        if (location.pathname === '/inbox') {
-          await api.post('/chat/read-announcements').catch(() => {});
-          if (mounted) setUnreadMessagesCount(0);
-        } else {
-          const msgRes = await api.get('/chat/unread-count').catch(() => ({ data: { count: 0 } }));
-          if (mounted && msgRes.data) {
-            setUnreadMessagesCount(msgRes.data.count || 0);
-          }
-        }
+        await fetchUnreadMessagesCount();
+        await fetchRecentMessages();
 
         // 3. System notifications for Bell icon (Option A)
         const notifRes = await api.get('/notifications').catch(() => ({ data: { notifications: [] } }));
@@ -106,7 +119,7 @@ export function AppShell() {
     }
     fetchInitialData();
     return () => { mounted = false; };
-  }, [userRole, fetchBadgeCounts]);
+  }, [userRole, fetchBadgeCounts, fetchUnreadMessagesCount, fetchRecentMessages]);
 
   // Sync badge counts whenever user navigates to approval/review routes
   useEffect(() => {
@@ -120,13 +133,15 @@ export function AppShell() {
     }
   }, [location.pathname, fetchBadgeCounts]);
 
-  // Handle route change for /inbox specifically
+  // Re-fetch accurate unread count whenever messages are marked as read in the active inbox
   useEffect(() => {
-    if (location.pathname === '/inbox') {
-      api.post('/chat/read-announcements').catch(() => {});
-      setUnreadMessagesCount(0);
-    }
-  }, [location.pathname]);
+    const handleRead = () => {
+      fetchUnreadMessagesCount();
+      fetchRecentMessages();
+    };
+    window.addEventListener('chat_messages_read', handleRead);
+    return () => window.removeEventListener('chat_messages_read', handleRead);
+  }, [fetchUnreadMessagesCount, fetchRecentMessages]);
 
   // Real-time WebSocket synchronization across all roles & panels
   useEffect(() => {
@@ -147,6 +162,7 @@ export function AppShell() {
         ...prev,
       ]);
       fetchBadgeCounts();
+      window.dispatchEvent(new Event('app_sync'));
     };
 
     // 2. Course Creator queue increment
@@ -154,6 +170,7 @@ export function AppShell() {
       if (userRole === 'COURSE_CREATOR') {
         setPendingRequestsCount((prev) => prev + 1);
       }
+      window.dispatchEvent(new Event('app_sync'));
     };
 
     // 3. Admin queue increment
@@ -161,11 +178,13 @@ export function AppShell() {
       if (userRole === 'ADMIN') {
         setPendingRequestsCount((prev) => prev + 1);
       }
+      window.dispatchEvent(new Event('app_sync'));
     };
 
     // Queue decrement handlers (real-time badge synchronization across panels)
     const handleQueueDecrement = () => {
       fetchBadgeCounts();
+      window.dispatchEvent(new Event('app_sync'));
     };
 
     // 4. Admin password reset request increment
@@ -188,16 +207,40 @@ export function AppShell() {
     };
 
     // 7. Mail & Chat message notifications (strictly for Mail icon)
-    const handleNewAnnouncement = () => {
-      if (location.pathname !== '/inbox') {
-        setUnreadMessagesCount((prev) => prev + 1);
+    const handleNewAnnouncement = (msg) => {
+      if (msg?.senderId === user?.id) return;
+      fetchUnreadMessagesCount();
+      fetchRecentMessages();
+      window.dispatchEvent(new Event('app_sync'));
+    };
+
+    const handleNewDirect = (msg) => {
+      if (msg?.senderId === user?.id) return;
+      if (msg?.recipientId === user?.id) {
+        fetchUnreadMessagesCount();
+        fetchRecentMessages();
+        window.dispatchEvent(new Event('app_sync'));
       }
     };
 
-    const handleNewDirect = () => {
-      if (location.pathname !== '/inbox') {
-        setUnreadMessagesCount((prev) => prev + 1);
+    const handleNewCommunity = (msg) => {
+      if (msg?.senderId === user?.id) return;
+      const isStaff = userRole === 'ADMIN' || userRole === 'MODERATOR';
+      const isSenderStaff = msg?.senderRole === 'ADMIN' || msg?.senderRole === 'MODERATOR';
+      if (
+        msg?.recipientId === user?.id ||
+        (isStaff && !isSenderStaff) ||
+        (!isStaff && isSenderStaff && (msg?.recipientId === user?.id || !msg?.recipientId))
+      ) {
+        fetchUnreadMessagesCount();
+        fetchRecentMessages();
+        window.dispatchEvent(new Event('app_sync'));
       }
+    };
+
+    const handleEnrollmentUpdate = () => {
+      fetchBadgeCounts();
+      window.dispatchEvent(new Event('app_sync'));
     };
 
     socket.on('system_notification', handleSystemNotification);
@@ -211,6 +254,12 @@ export function AppShell() {
     socket.on('user_role_updated', handleRoleUpdated);
     socket.on('new_announcement', handleNewAnnouncement);
     socket.on('new_direct_message', handleNewDirect);
+    socket.on('new_community_message', handleNewCommunity);
+    socket.on('enrollment_status_updated', handleEnrollmentUpdate);
+    socket.on('enrollment_approved', handleEnrollmentUpdate);
+    socket.on('enrollment_rejected', handleEnrollmentUpdate);
+    socket.on('transfer:created', handleEnrollmentUpdate);
+    socket.on('transfer:updated', handleEnrollmentUpdate);
 
     return () => {
       socket.off('system_notification', handleSystemNotification);
@@ -224,8 +273,14 @@ export function AppShell() {
       socket.off('user_role_updated', handleRoleUpdated);
       socket.off('new_announcement', handleNewAnnouncement);
       socket.off('new_direct_message', handleNewDirect);
+      socket.off('new_community_message', handleNewCommunity);
+      socket.off('enrollment_status_updated', handleEnrollmentUpdate);
+      socket.off('enrollment_approved', handleEnrollmentUpdate);
+      socket.off('enrollment_rejected', handleEnrollmentUpdate);
+      socket.off('transfer:created', handleEnrollmentUpdate);
+      socket.off('transfer:updated', handleEnrollmentUpdate);
     };
-  }, [socket, userRole, location.pathname, fetchBadgeCounts]);
+  }, [socket, userRole, user?.id, location.pathname, fetchBadgeCounts, fetchUnreadMessagesCount, fetchRecentMessages]);
 
   // Moderator permissions parser for dynamic permission-aware navigation
   const moderatorPerms = (() => {
@@ -547,17 +602,132 @@ export function AppShell() {
               )}
             </button>
 
-            {/* Minimal Borderless Inbox Direct Shortcut */}
-            <NavLink
-              to="/inbox"
-              title="Inbox & Messages"
-              className="p-2 rounded-full text-app-secondary hover:text-app hover:bg-slate-200/60 dark:hover:bg-slate-800/70 transition-colors relative"
-            >
-              <Mail className="h-4 w-4" />
-              {unreadMessagesCount > 0 && (
-                <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500" />
+            {/* Minimal Borderless Inbox Dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !mailboxOpen;
+                  setMailboxOpen(next);
+                  if (next) {
+                    setNotificationsOpen(false);
+                    fetchRecentMessages();
+                  }
+                }}
+                title="Inbox & Messages"
+                className="p-2 rounded-full text-app-secondary hover:text-app hover:bg-slate-200/60 dark:hover:bg-slate-800/70 transition-colors relative group"
+              >
+                <Mail className="h-4 w-4 text-app-secondary" />
+                {unreadMessagesCount > 0 && (
+                  <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-red-500" />
+                )}
+              </button>
+
+              {mailboxOpen && (
+                <div
+                  onClick={() => setMailboxOpen(false)}
+                  className="fixed inset-0 z-40"
+                />
               )}
-            </NavLink>
+
+              {mailboxOpen && (
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-surface dark:bg-dark-surface border border-app rounded-dialog shadow-dialog p-4 z-50 animate-slide-up">
+                  <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-app">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-app uppercase tracking-wider">
+                        Inbox & Messages
+                      </span>
+                      {unreadMessagesCount > 0 && (
+                        <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-blue-500/10 text-blue-500 font-semibold">
+                          {unreadMessagesCount} new
+                        </span>
+                      )}
+                    </div>
+                    <Link
+                      to="/inbox"
+                      onClick={() => setMailboxOpen(false)}
+                      className="text-[10px] text-brand-600 dark:text-brand-400 font-semibold hover:underline"
+                    >
+                      Open Hub →
+                    </Link>
+                  </div>
+
+                  <div className="space-y-2 text-xs max-h-72 overflow-y-auto scrollbar-thin">
+                    {recentMessages.length > 0 ? (
+                      recentMessages.slice(0, 10).map((m, i) => {
+                        const isUnread = !m.read;
+                        return (
+                          <div
+                            key={m.id || i}
+                            onClick={() => {
+                              setMailboxOpen(false);
+                              navigate(m.link || '/inbox');
+                            }}
+                            className={`p-2.5 rounded-btn border border-app flex items-start gap-2.5 cursor-pointer transition-all ${
+                              isUnread
+                                ? 'bg-blue-50/75 dark:bg-blue-950/40'
+                                : 'bg-elevated/40 hover:bg-slate-200/80 dark:hover:bg-dark-elevated opacity-85'
+                            }`}
+                          >
+                            <Avatar name={m.senderName || 'Sender'} size="xs" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <p className={`truncate text-xs ${isUnread ? 'font-bold text-app' : 'font-semibold text-app-secondary'}`}>
+                                    {m.senderName}
+                                  </p>
+                                  {isUnread && (
+                                    <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />
+                                  )}
+                                </div>
+                                <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded border uppercase shrink-0 ${
+                                  isUnread
+                                    ? 'bg-blue-500/10 border-blue-500/30 text-blue-600 dark:text-blue-400 font-semibold'
+                                    : 'bg-app-subtle border-app text-app-muted'
+                                }`}>
+                                  {m.channelType === 'COMMUNITY' ? 'Support' : m.channelType}
+                                </span>
+                              </div>
+                              <p className={`text-[11px] line-clamp-1 mt-0.5 ${isUnread ? 'text-app font-medium' : 'text-app-secondary'}`}>
+                                {m.message}
+                              </p>
+                              <span className="text-[10px] text-app-muted mt-1 block font-mono">
+                                {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="p-6 text-center text-xs text-app-muted">
+                        No recent messages in your inbox.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-2.5 mt-2.5 border-t border-app flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        api.post('/chat/read-announcements').catch(() => {});
+                        setUnreadMessagesCount(0);
+                        setRecentMessages((prev) => prev.map((m) => ({ ...m, read: true })));
+                      }}
+                      className="text-[10px] text-app-muted hover:text-app transition-colors"
+                    >
+                      Mark read
+                    </button>
+                    <Link
+                      to="/inbox"
+                      onClick={() => setMailboxOpen(false)}
+                      className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1"
+                    >
+                      View All Messages
+                    </Link>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* Minimal Borderless Notifications Dropdown */}
             <div className="relative">
@@ -566,6 +736,9 @@ export function AppShell() {
                 onClick={() => {
                   const next = !notificationsOpen;
                   setNotificationsOpen(next);
+                  if (next) {
+                    setMailboxOpen(false);
+                  }
                   if (next && unreadNotificationsCount > 0) {
                     api.patch('/notifications/read-all').catch(() => {});
                     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));

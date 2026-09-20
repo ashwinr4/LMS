@@ -244,17 +244,17 @@ export default function CreatorAssessments() {
                   <span className="meta-divider" />
                   <span className="text-xs text-app-secondary">{a.moduleTitle}</span>
                   <span className="meta-divider" />
-                  <StatusBadge status="ACTIVE" label={`${a.questionCount} Questions`} size="xs" />
+                  <StatusBadge status="ACTIVE" label={`${a.questionCount ?? 0} Questions`} size="xs" />
                 </div>
 
                 <h3 className="text-base font-bold text-app">{a.title}</h3>
                 {a.description && <p className="text-xs text-app-secondary max-w-2xl">{a.description}</p>}
 
                 <div className="flex flex-wrap items-center gap-4 text-xs text-app-secondary font-medium pt-1">
-                  <span>⏱️ {a.durationMinutes} Mins</span>
-                  <span>🎯 Pass: {a.passingScore}%</span>
-                  <span>🎲 Draw: {a.sampleSize} questions / exam</span>
-                  <span>📝 {a.submissionCount} Submissions</span>
+                  <span>⏱️ {a.durationMinutes ?? 30} Mins</span>
+                  <span>🎯 Pass: {a.passingScore ?? 75}%</span>
+                  <span>🎲 Draw: {a.sampleSize ?? 5} questions / exam</span>
+                  <span>📝 {a.submissionCount ?? 0} Submissions</span>
                 </div>
               </div>
 

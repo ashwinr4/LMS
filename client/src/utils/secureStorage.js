@@ -64,17 +64,21 @@ class SecureStorage {
         if (localStorage.getItem(k)) localStorage.removeItem(k);
         if (sessionStorage.getItem(k)) sessionStorage.removeItem(k);
       });
-      // Purge any lingering tokens in localStorage from older sessions
-      Object.values(STORAGE_KEYS).forEach((k) => {
-        localStorage.removeItem(k);
-      });
     } catch {}
   }
 
   getItem(key) {
     try {
-      // Exclusively read from sessionStorage so tab close destroys the session
-      const encrypted = sessionStorage.getItem(key);
+      // Check sessionStorage first for current tab
+      let encrypted = sessionStorage.getItem(key);
+      if (!encrypted) {
+        // Fall back to localStorage for cross-tab and tab recovery
+        encrypted = localStorage.getItem(key);
+        if (encrypted) {
+          // Hydrate current tab's sessionStorage
+          sessionStorage.setItem(key, encrypted);
+        }
+      }
       if (!encrypted) return null;
       return descramble(encrypted);
     } catch {
@@ -101,8 +105,7 @@ class SecureStorage {
       const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
       const scrambled = scramble(str);
       sessionStorage.setItem(key, scrambled);
-      // Guarantee localStorage is purged of tokens
-      localStorage.removeItem(key);
+      localStorage.setItem(key, scrambled);
     } catch {}
   }
 
@@ -118,6 +121,7 @@ class SecureStorage {
       sessionStorage.clear();
       Object.values(STORAGE_KEYS).forEach((k) => {
         localStorage.removeItem(k);
+        sessionStorage.removeItem(k);
       });
       this.cleanLegacy();
     } catch {}

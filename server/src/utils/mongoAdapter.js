@@ -59,7 +59,9 @@ function translateWhere(where = {}) {
       continue;
     }
 
-    if (val && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
+    if ((key === 'read' || key === 'isRead') && val === false) {
+      filter[key] = { $ne: true };
+    } else if (val && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date)) {
       const subFilter = {};
       for (const [op, opVal] of Object.entries(val)) {
         if (op === 'in') subFilter.$in = opVal;
@@ -355,6 +357,25 @@ export class MongoAdapter {
           where: { id: doc.moduleId },
           include: include.module.include,
         });
+      }
+    }
+
+    if (modelKey === 'assessment') {
+      if (include.module) {
+        result.module = await this.module.findUnique({
+          where: { id: doc.moduleId },
+          select: include.module.select,
+        });
+      }
+      if (include.submissions) {
+        result.submissions = await this.assessmentSubmission.findMany({
+          where: { assessmentId: doc.id },
+        });
+      }
+      if (include._count) {
+        result._count = {
+          submissions: await this.assessmentSubmission.count({ where: { assessmentId: doc.id } }),
+        };
       }
     }
 

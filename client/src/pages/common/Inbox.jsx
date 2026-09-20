@@ -66,6 +66,11 @@ export default function Inbox() {
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [channelCounts, setChannelCounts] = useState({
+    announcements: 0,
+    community: 0,
+    direct: 0,
+  });
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const inputRef = useRef(null);
@@ -73,6 +78,31 @@ export default function Inbox() {
   const isAdmin = user?.role === 'ADMIN';
   const isModerator = user?.role === 'MODERATOR';
   const isStaff = isAdmin || isModerator;
+
+  const selectedContactRef = useRef(selectedContact);
+  useEffect(() => {
+    selectedContactRef.current = selectedContact;
+  }, [selectedContact]);
+
+  const selectedCommunityUserRef = useRef(selectedCommunityUser);
+  useEffect(() => {
+    selectedCommunityUserRef.current = selectedCommunityUser;
+  }, [selectedCommunityUser]);
+
+  const fetchChannelCounts = useCallback(async () => {
+    try {
+      const { data } = await api.get('/chat/unread-count');
+      if (data?.success) {
+        setChannelCounts({
+          announcements: data.announcementCount || 0,
+          community: data.communityCount || 0,
+          direct: data.directCount || 0,
+        });
+      }
+    } catch {
+      // silent
+    }
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -83,14 +113,14 @@ export default function Inbox() {
     if (!isStaff) return;
     try {
       const { data } = await api.get('/chat/community/threads');
-      const threads = data.threads || [];
-      setCommunityThreads(threads);
-      if (threads.length > 0) {
-        setSelectedCommunityUser((prev) => {
-          if (!prev) return threads[0];
-          const exists = threads.find((t) => t.id === prev.id);
-          return exists || threads[0];
-        });
+      const currentSelectedCommunity = selectedCommunityUserRef.current;
+      const rawThreads = data.threads || [];
+      const updatedThreads = rawThreads.map((t) =>
+        currentSelectedCommunity && t.id === currentSelectedCommunity.id ? { ...t, unread: false } : t
+      );
+      setCommunityThreads(updatedThreads);
+      if (rawThreads.length > 0 && !currentSelectedCommunity) {
+        setSelectedCommunityUser(rawThreads[0]);
       }
     } catch {
       setCommunityThreads([]);
@@ -121,6 +151,16 @@ export default function Inbox() {
       }
       const { data } = await api.get(url);
       setMessages(data.messages || []);
+
+      if (activeTab === 'DIRECT' && selectedContact) {
+        setContacts((prev) =>
+          prev.map((c) => (c.id === selectedContact.id ? { ...c, unreadCount: 0 } : c))
+        );
+      } else if (activeTab === 'COMMUNITY' && isStaff && selectedCommunityUser) {
+        setCommunityThreads((prev) =>
+          prev.map((t) => (t.id === selectedCommunityUser.id ? { ...t, unread: false } : t))
+        );
+      }
     } catch {
       setMessages([]);
     } finally {
@@ -132,21 +172,36 @@ export default function Inbox() {
   const fetchContacts = useCallback(async () => {
     try {
       const { data } = await api.get('/chat/contacts');
-      setContacts(data.contacts || []);
-      if (data.contacts?.length > 0 && !selectedContact) {
-        setSelectedContact(data.contacts[0]);
+      const currentSelected = selectedContactRef.current;
+      const rawContacts = data.contacts || [];
+      const updated = rawContacts.map((c) =>
+        currentSelected && c.id === currentSelected.id ? { ...c, unreadCount: 0 } : c
+      );
+      setContacts(updated);
+      if (rawContacts.length > 0 && !currentSelected) {
+        setSelectedContact(rawContacts[0]);
       }
     } catch {
       setContacts([]);
     }
-  }, [selectedContact]);
+  }, []);
 
   useEffect(() => {
-    fetchMessages();
+    fetchChannelCounts();
+  }, [fetchChannelCounts]);
+
+  useEffect(() => {
+    fetchMessages().then(() => {
+      window.dispatchEvent(new Event('chat_messages_read'));
+      fetchChannelCounts();
+    });
     if (activeTab === 'ANNOUNCEMENT') {
-      api.post('/chat/read-announcements').catch(() => {});
+      api.post('/chat/read-announcements').then(() => {
+        window.dispatchEvent(new Event('chat_messages_read'));
+        fetchChannelCounts();
+      }).catch(() => {});
     }
-  }, [fetchMessages, activeTab]);
+  }, [fetchMessages, activeTab, fetchChannelCounts]);
 
   useEffect(() => {
     if (activeTab === 'DIRECT') {
@@ -163,17 +218,40 @@ export default function Inbox() {
     const handleAnnouncement = (msg) => {
       if (activeTab === 'ANNOUNCEMENT') {
         setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+        api.post('/chat/read-announcements').then(() => {
+          window.dispatchEvent(new Event('chat_messages_read'));
+          fetchChannelCounts();
+        }).catch(() => {});
+      } else {
+        setChannelCounts((prev) => ({ ...prev, announcements: prev.announcements + 1 }));
       }
     };
 
     const handleCommunity = (msg) => {
+      const activeId = selectedCommunityUserRef.current?.id;
       if (activeTab === 'COMMUNITY') {
         if (isStaff) {
-          const activeId = selectedCommunityUser?.id;
           const isForActiveThread = activeId && (msg.senderId === activeId || msg.recipientId === activeId);
           if (!isForActiveThread) {
             fetchCommunityThreads();
+            setChannelCounts((prev) => ({ ...prev, community: prev.community + 1 }));
             return;
+          }
+          if (msg.senderId === activeId) {
+            api.get(`/chat/messages?type=COMMUNITY&contactId=${activeId}`).then(() => {
+              window.dispatchEvent(new Event('chat_messages_read'));
+              fetchChannelCounts();
+            }).catch(() => {});
+            setCommunityThreads((prev) =>
+              prev.map((t) => (t.id === activeId ? { ...t, unread: false } : t))
+            );
+          }
+        } else {
+          if (msg.senderRole === 'ADMIN' || msg.senderRole === 'MODERATOR') {
+            api.get(`/chat/messages?type=COMMUNITY`).then(() => {
+              window.dispatchEvent(new Event('chat_messages_read'));
+              fetchChannelCounts();
+            }).catch(() => {});
           }
         }
         setMessages((prev) => {
@@ -189,15 +267,32 @@ export default function Inbox() {
           }
           return [...prev, msg];
         });
+      } else {
+        if (msg.senderId !== user?.id) {
+          setChannelCounts((prev) => ({ ...prev, community: prev.community + 1 }));
+          if (isStaff) {
+            fetchCommunityThreads();
+          }
+        }
       }
     };
 
     const handleDirect = (msg) => {
+      const currentSelected = selectedContactRef.current;
       if (activeTab === 'DIRECT') {
         if (
-          (selectedContact && (msg.senderId === selectedContact.id || msg.recipientId === selectedContact.id)) ||
+          (currentSelected && (msg.senderId === currentSelected.id || msg.recipientId === currentSelected.id)) ||
           msg.senderId === user?.id
         ) {
+          if (currentSelected && msg.senderId === currentSelected.id) {
+            api.get(`/chat/messages?type=DIRECT&contactId=${currentSelected.id}`).then(() => {
+              window.dispatchEvent(new Event('chat_messages_read'));
+              fetchChannelCounts();
+            }).catch(() => {});
+            setContacts((prev) =>
+              prev.map((c) => (c.id === currentSelected.id ? { ...c, unreadCount: 0 } : c))
+            );
+          }
           setMessages((prev) => {
             if (prev.some((m) => m.id === msg.id)) return prev;
             if (msg.senderId === user?.id) {
@@ -210,9 +305,30 @@ export default function Inbox() {
             }
             return [...prev, msg];
           });
+        } else if (msg.senderId !== user?.id && msg.recipientId === user?.id) {
+          setChannelCounts((prev) => ({ ...prev, direct: prev.direct + 1 }));
+          setContacts((prev) => {
+            const exists = prev.some((c) => c.id === msg.senderId);
+            if (!exists) {
+              fetchContacts();
+              return prev;
+            }
+            return prev.map((c) => (c.id === msg.senderId ? { ...c, unreadCount: (c.unreadCount || 0) + 1 } : c));
+          });
+        }
+      } else {
+        if (msg.senderId !== user?.id && msg.recipientId === user?.id) {
+          setChannelCounts((prev) => ({ ...prev, direct: prev.direct + 1 }));
+          setContacts((prev) => {
+            const exists = prev.some((c) => c.id === msg.senderId);
+            if (!exists) {
+              fetchContacts();
+              return prev;
+            }
+            return prev.map((c) => (c.id === msg.senderId ? { ...c, unreadCount: (c.unreadCount || 0) + 1 } : c));
+          });
         }
       }
-      fetchContacts();
     };
 
     const handleAudit = (msg) => {
@@ -361,9 +477,24 @@ export default function Inbox() {
         {/* Channel Selection Buttons with Smooth Sliding Capsule */}
         <SegmentedToggle
           options={[
-            { id: 'ANNOUNCEMENT', label: 'Announcements', icon: <Megaphone className="h-3.5 w-3.5" /> },
-            { id: 'COMMUNITY', label: 'Community Support', icon: <Users className="h-3.5 w-3.5" /> },
-            { id: 'DIRECT', label: 'Direct Messages', icon: <MessageSquare className="h-3.5 w-3.5" /> },
+            {
+              id: 'ANNOUNCEMENT',
+              label: 'Announcements',
+              icon: <Megaphone className="h-3.5 w-3.5" />,
+              hasBadge: channelCounts.announcements > 0,
+            },
+            {
+              id: 'COMMUNITY',
+              label: 'Community Support',
+              icon: <Users className="h-3.5 w-3.5" />,
+              hasBadge: channelCounts.community > 0,
+            },
+            {
+              id: 'DIRECT',
+              label: 'Direct Messages',
+              icon: <MessageSquare className="h-3.5 w-3.5" />,
+              hasBadge: channelCounts.direct > 0,
+            },
             ...(isAdmin ? [{ id: 'AUDIT', label: 'Admin Audit View', icon: <ShieldCheck className="h-3.5 w-3.5" /> }] : []),
           ]}
           value={activeTab}
@@ -398,7 +529,12 @@ export default function Inbox() {
                   <button
                     key={contact.id}
                     type="button"
-                    onClick={() => setSelectedContact(contact)}
+                    onClick={() => {
+                      setSelectedContact(contact);
+                      setContacts((prev) =>
+                        prev.map((c) => (c.id === contact.id ? { ...c, unreadCount: 0 } : c))
+                      );
+                    }}
                     className={`w-full p-3 text-left flex items-center gap-3 transition-colors ${
                       isSelected
                         ? 'bg-blue-50/70 dark:bg-slate-800/80 border-l-4 border-l-blue-600'
@@ -409,9 +545,14 @@ export default function Inbox() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between">
                         <p className="text-xs font-bold text-app truncate">{contact.name}</p>
-                        <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-elevated border border-app text-app-secondary">
-                          {contact.role}
-                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {contact.unreadCount > 0 && !isSelected && (
+                            <span className="h-2 w-2 rounded-full bg-red-500 shrink-0" />
+                          )}
+                          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-elevated border border-app text-app-secondary">
+                            {contact.role}
+                          </span>
+                        </div>
                       </div>
                       <p className="text-[11px] text-app-muted truncate mt-0.5">
                         {contact.department || 'Platform Member'}
@@ -453,7 +594,12 @@ export default function Inbox() {
                   <button
                     key={thread.id}
                     type="button"
-                    onClick={() => setSelectedCommunityUser(thread)}
+                    onClick={() => {
+                      setSelectedCommunityUser(thread);
+                      setCommunityThreads((prev) =>
+                        prev.map((t) => (t.id === thread.id ? { ...t, unread: false } : t))
+                      );
+                    }}
                     className={`w-full p-3 text-left flex items-center gap-3 transition-colors ${
                       isSelected
                         ? 'bg-blue-50/70 dark:bg-slate-800/80 border-l-4 border-l-blue-600'
@@ -463,7 +609,12 @@ export default function Inbox() {
                     <Avatar name={thread.name} size="sm" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between">
-                        <p className="text-xs font-bold text-app truncate">{thread.name}</p>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <p className="text-xs font-bold text-app truncate">{thread.name}</p>
+                          {thread.unread && !isSelected && (
+                            <span className="h-2 w-2 rounded-full bg-red-500 shrink-0" />
+                          )}
+                        </div>
                         <span className="text-[10px] font-mono text-app-muted">
                           {new Date(thread.lastMessageAt).toLocaleTimeString([], {
                             hour: 'numeric',

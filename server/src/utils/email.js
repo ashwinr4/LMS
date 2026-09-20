@@ -44,20 +44,9 @@ export async function sendEmail({ to, subject, html, text }) {
     const info = await mailer.sendMail({
       from: fromAddress,
       to,
-      envelope: {
-        from: smtpUser,
-        to: Array.isArray(to) ? to : [to],
-      },
       subject,
       text: plainText,
       html,
-      headers: {
-        'X-Priority': '1',
-        'Priority': 'urgent',
-        'Importance': 'high',
-        'X-Auto-Response-Suppress': 'All',
-        'Auto-Submitted': 'auto-generated',
-      },
     });
 
     logger.info(`Live Email Dispatched successfully: MessageId=${info.messageId} to ${to}`);
@@ -69,7 +58,9 @@ export async function sendEmail({ to, subject, html, text }) {
 }
 
 export async function sendOtpEmail(toEmail, otpCode, userName = 'Qualiva Member', context = 'Sign In') {
-  const subject = `${otpCode} is your Qualiva verification code`;
+  const timeString = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  const subject = `[Qualiva Code: ${otpCode}] Your Verification Passcode (${timeString})`;
+  logger.info(`🔑 [2FA OTP GENERATED] Passcode for ${toEmail}: ${otpCode}`);
   const text = `Hello ${userName},\n\nYour Qualiva verification code is: ${otpCode}\n\nThis code will expire in 10 minutes. If you did not initiate this request, you can safely ignore this email.\n\nQualiva Enterprise Platform`;
   
   const html = `

@@ -28,7 +28,7 @@ export function SocketProvider({ children }) {
 
     s.on('connect', () => {
       setConnected(true);
-      if (user) {
+      if (user?.id) {
         s.emit('join_user_room', user.id);
         s.emit('join_role_room', user.role);
       }
@@ -83,12 +83,68 @@ export function SocketProvider({ children }) {
       });
     });
 
+    // Real-Time Inbox Message Alerts (shown when not actively on the inbox page)
+    s.on('new_direct_message', (data) => {
+      if (data?.senderId !== user?.id && data?.recipientId === user?.id) {
+        if (window.location.pathname !== '/inbox') {
+          addToast({
+            type: 'info',
+            title: `💬 Message from ${data.senderName || 'Member'}`,
+            message: data.content || (data.fileName ? `Sent an attachment: ${data.fileName}` : 'New message received.'),
+          });
+        }
+      }
+    });
+
+    s.on('new_community_message', (data) => {
+      if (data?.senderId === user?.id) return;
+      const isStaff = user?.role === 'ADMIN' || user?.role === 'MODERATOR';
+      const isSenderStaff = data?.senderRole === 'ADMIN' || data?.senderRole === 'MODERATOR';
+      if (isStaff && !isSenderStaff) {
+        if (window.location.pathname !== '/inbox') {
+          addToast({
+            type: 'info',
+            title: `🎧 Support Ticket: ${data.senderName || 'User'}`,
+            message: data.content || (data.fileName ? `Sent an attachment: ${data.fileName}` : 'New support inquiry.'),
+          });
+        }
+      } else if (!isStaff && isSenderStaff && (data.recipientId === user?.id || !data.recipientId)) {
+        if (window.location.pathname !== '/inbox') {
+          addToast({
+            type: 'info',
+            title: `🎧 Support Desk: ${data.senderName || 'Staff'}`,
+            message: data.content || (data.fileName ? `Sent an attachment: ${data.fileName}` : 'Support updated your ticket.'),
+          });
+        }
+      }
+    });
+
+    s.on('new_announcement', (data) => {
+      if (data?.senderId !== user?.id) {
+        if (window.location.pathname !== '/inbox') {
+          addToast({
+            type: 'info',
+            title: `📢 Announcement: ${data.senderName || 'Admin'}`,
+            message: data.content || 'New platform announcement broadcasted.',
+          });
+        }
+      }
+    });
+
     setSocket(s);
 
     return () => {
       s.disconnect();
     };
   }, [user]);
+
+  // Resilient re-joining of user & role rooms whenever connection or auth state updates
+  useEffect(() => {
+    if (socket && connected && user?.id) {
+      socket.emit('join_user_room', user.id);
+      socket.emit('join_role_room', user.role);
+    }
+  }, [socket, connected, user?.id, user?.role]);
 
   return (
     <SocketContext.Provider value={{ socket, connected }}>

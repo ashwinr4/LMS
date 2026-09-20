@@ -9,7 +9,7 @@ import { io } from '../server.js';
 
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'esmms_super_secure_access_token_secret_key_2026_x89';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'esmms_super_secure_refresh_token_secret_key_2026_y90';
-const ACCESS_TOKEN_EXPIRES = '8h';
+const ACCESS_TOKEN_EXPIRES = '12h';
 const REFRESH_TOKEN_EXPIRES_DAYS = 7;
 
 function generateAccessToken(user) {
@@ -348,10 +348,12 @@ export async function login(req, res) {
       },
     });
 
-    // Dispatch Live 6-Digit Passcode asynchronously via Gmail SMTP (non-blocking)
-    sendOtpEmail(user.email, otp, user.name, 'Sign In').catch((emailErr) => {
+    // Dispatch Live 6-Digit Passcode via Gmail SMTP
+    try {
+      await sendOtpEmail(user.email, otp, user.name, 'Sign In');
+    } catch (emailErr) {
       logger.warn(`Could not dispatch OTP email: ${emailErr.message}`);
-    });
+    }
 
     logger.info(`Login 2FA OTP generated and dispatched for: ${user.email}`);
 
