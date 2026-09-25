@@ -21,7 +21,9 @@ import {
   RefreshCw,
   Sliders,
   History,
+  Trash2,
 } from 'lucide-react';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog.jsx';
 import { ModeratorPermissionModal, MODERATOR_MODULES } from '../../components/admin/ModeratorPermissionModal.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 
@@ -38,6 +40,8 @@ export default function AdminUserDetail() {
   const [success, setSuccess] = useState(null);
   const [resettingPassword, setResettingPassword] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deletingUser, setDeletingUser] = useState(false);
 
   const activeTab = searchParams.get('tab') || 'profile';
   const setActiveTab = (tabId) => {
@@ -139,6 +143,26 @@ export default function AdminUserDetail() {
       setError(err.response?.data?.message || 'Failed to reset lockout.');
     } finally {
       setUnlocking(false);
+    }
+  };
+
+  const handleDeleteUser = async () => {
+    setDeletingUser(true);
+    setError(null);
+    try {
+      await api.delete(`/admin/users/${userId}`);
+      setDeleteModalOpen(false);
+      navigate(ROUTES.ADMIN_USERS, {
+        state: {
+          flashMessage: `User ${userData?.name || userData?.email} has been permanently deleted from all databases.`,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to delete user:', err);
+      setError(err.response?.data?.message || 'Failed to remove user account.');
+      setDeleteModalOpen(false);
+    } finally {
+      setDeletingUser(false);
     }
   };
 
@@ -249,6 +273,20 @@ export default function AdminUserDetail() {
             <p className="text-xs text-app-muted font-mono mt-0.5">{userData?.email}</p>
           </div>
         </div>
+
+        {/* Remove User Action */}
+        {!isSelf && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setDeleteModalOpen(true)}
+            leftIcon={<Trash2 className="h-3.5 w-3.5" />}
+            className="text-red-600 dark:text-red-400 border-red-200 dark:border-red-900/40 hover:bg-red-50 dark:hover:bg-red-950/20 text-xs font-medium self-start sm:self-center"
+          >
+            Remove User
+          </Button>
+        )}
       </div>
 
       {/* ── Self-Profile Advisory Banner ──────────────────── */}
@@ -463,6 +501,32 @@ export default function AdminUserDetail() {
               </div>
             </div>
           </div>
+
+          {/* Danger Zone */}
+          {!isSelf && (
+            <div className="border border-red-200 dark:border-red-900/40 bg-red-500/5 rounded-card p-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-xs font-semibold text-red-600 dark:text-red-400">
+                    Remove User
+                  </h3>
+                  <p className="text-xs text-app-secondary mt-0.5">
+                    Permanently delete this user and all associated records. This action cannot be undone.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  onClick={() => setDeleteModalOpen(true)}
+                  leftIcon={<Trash2 className="h-3.5 w-3.5" />}
+                  className="shrink-0 self-start sm:self-center"
+                >
+                  Remove User
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -869,6 +933,19 @@ export default function AdminUserDetail() {
           </div>
         </div>
       )}
+
+      {/* ── Confirm Delete User Dialog ───────────────────── */}
+      <ConfirmDialog
+        isOpen={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        onConfirm={handleDeleteUser}
+        title="Remove User"
+        message={`Are you sure you want to remove ${userData?.name || 'this user'}? All associated records and permissions will be permanently deleted. This action cannot be undone.`}
+        confirmText="Remove User"
+        cancelText="Cancel"
+        variant="danger"
+        isLoading={deletingUser}
+      />
     </div>
   );
 }

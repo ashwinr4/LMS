@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { ROUTES } from '../../routes/routeMap.js';
 import { api } from '../../services/api.js';
 import { useSocket } from '../../context/SocketContext.jsx';
@@ -37,6 +37,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 
 export default function UserDirectory() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user: currentUser } = useAuth();
   const { socket } = useSocket();
   const [users, setUsers] = useState([]);
@@ -321,6 +322,13 @@ export default function UserDirectory() {
           </div>
         }
       />
+
+      {location.state?.flashMessage && (
+        <div className="p-3 rounded-card bg-emerald-500/10 border border-emerald-500/20 text-emerald-800 dark:text-emerald-300 text-xs flex items-center gap-2.5 shadow-sm">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>{location.state.flashMessage}</span>
+        </div>
+      )}
 
       {/* Filter & Search Bar */}
       <div className="bg-card border border-app rounded-card p-4 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">

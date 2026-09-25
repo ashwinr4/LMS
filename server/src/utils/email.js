@@ -194,3 +194,57 @@ export async function sendPasswordResetEmail(toEmail, tempPassword, userName = '
   `;
   return sendEmail({ to: toEmail, subject, html, text });
 }
+
+export async function sendAccountDeletedEmail(toEmail, userName = 'Enterprise Member') {
+  const subject = `Notice: Your Qualiva Enterprise Account has been Removed`;
+  const text = `Hello ${userName},\n\nThis notification is to inform you that your Qualiva Enterprise account associated with ${toEmail} has been permanently removed by an administrator. All active sessions, course enrollments, and platform privileges have been terminated.\n\nIf you believe this was done in error, please contact your organization administrator.\n\nQualiva Enterprise Platform`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Account Removed</title>
+    </head>
+    <body style="margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; color: #0f172a;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 500px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0;">
+        <tr>
+          <td style="padding: 24px 28px; background-color: #0f172a; text-align: left;">
+            <h2 style="margin: 0; font-size: 18px; font-weight: 700; color: #ffffff; letter-spacing: -0.02em;">
+              Qualiva Enterprise
+            </h2>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 28px; text-align: left;">
+            <h3 style="margin: 0 0 14px 0; font-size: 16px; color: #0f172a;">Account Removed</h3>
+            <p style="margin: 0 0 16px 0; font-size: 14px; color: #475569; line-height: 1.6;">
+              Hello <strong>${userName}</strong>,
+            </p>
+            <p style="margin: 0 0 16px 0; font-size: 14px; color: #475569; line-height: 1.6;">
+              This notification is to inform you that your account associated with <strong>${toEmail}</strong> has been removed from the platform by an administrator.
+            </p>
+            <div style="background-color: #fef2f2; border: 1px solid #fee2e2; border-radius: 8px; padding: 14px; margin: 20px 0;">
+              <p style="margin: 0; font-size: 13px; color: #991b1b; line-height: 1.5;">
+                All active sessions, course enrollments, assessment records, and platform access privileges have been terminated.
+              </p>
+            </div>
+            <p style="margin: 0; font-size: 13px; color: #64748b; line-height: 1.5;">
+              If you have any questions or believe this was done in error, please reach out to your organizational training administrator.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 16px 28px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center;">
+            <p style="margin: 0; font-size: 11px; color: #94a3b8;">
+              &copy; 2026 Qualiva Enterprise. High-Stakes Learning & Governance.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+  return sendEmail({ to: toEmail, subject, html, text });
+}
+

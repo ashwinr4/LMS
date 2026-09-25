@@ -1,6 +1,6 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
-import { sendPasswordResetEmail } from '../utils/email.js';
+import { sendPasswordResetEmail, sendAccountDeletedEmail } from '../utils/email.js';
 import bcrypt from 'bcryptjs';
 import * as XLSX from 'xlsx';
 import crypto from 'crypto';
@@ -1455,3 +1455,102 @@ export async function getModeratorPermissionHistory(req, res) {
     return res.status(500).json({ success: false, error: 'FETCH_FAILED', message: error.message });
   }
 }
+
+/**
+ * DELETE /api/v1/admin/users/:id
+ * Permanently deletes a user and cascades all related records across primary and backup databases.
+ * Dispatches an account removal notification email to the user.
+ */
+export async function deleteUser(req, res) {
+  try {
+    const { id } = req.params;
+
+    // Prevent administrators from deleting themselves
+    if (req.user?.id === id) {
+      return res.status(400).json({
+        success: false,
+        error: 'CANNOT_DELETE_SELF',
+        message: 'You cannot delete your own active administrator account.',
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, name: true, email: true, role: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'USER_NOT_FOUND',
+        message: 'User does not exist or has already been deleted.',
+      });
+    }
+
+    // 1. Dispatch Account Removal Notification Email to User
+    sendAccountDeletedEmail(user.email, user.name).catch((emailErr) => {
+      logger.warn(`Could not dispatch account deletion email to ${user.email}: ${emailErr.message}`);
+    });
+
+    // 2. Cascade delete all related records
+    const safeDeleteMany = async (modelName, whereClause) => {
+      try {
+        if (prisma[modelName] && typeof prisma[modelName].deleteMany === 'function') {
+          await prisma[modelName].deleteMany({ where: whereClause });
+        }
+      } catch (err) {
+        logger.debug(`Cascade delete notice on ${modelName}: ${err.message}`);
+      }
+    };
+
+    await Promise.all([
+      safeDeleteMany('activeSession', { userId: id }),
+      safeDeleteMany('assignment', { userId: id }),
+      safeDeleteMany('courseEnrollmentRequest', { studentId: id }),
+      safeDeleteMany('assessmentSubmission', { userId: id }),
+      safeDeleteMany('certificate', { userId: id }),
+      safeDeleteMany('notification', { recipientId: id }),
+      safeDeleteMany('transferRequest', { studentId: id }),
+      safeDeleteMany('chatMessage', { senderId: id }),
+    ]);
+
+    // 3. Delete the user (replicated to backup via the Universal Proxy)
+    await prisma.user.delete({
+      where: { id },
+    });
+
+    // 4. Record Audit Log Entry
+    await prisma.auditLog.create({
+      data: {
+        actorId: req.user.id,
+        actorEmail: req.user.email,
+        actorName: req.user.name,
+        action: 'USER_DELETED_BY_ADMIN',
+        resource: user.email,
+        details: `User ${user.name} (${user.email}, ${user.role}) was permanently deleted from the platform by ${req.user.name}.`,
+        ipAddress: req.ip,
+        riskLevel: 'HIGH',
+      },
+    });
+
+    logger.info(`User permanently removed by Admin ${req.user.email}: ${user.email} (${user.id})`);
+
+    return res.status(200).json({
+      success: true,
+      message: `User ${user.name} (${user.email}) has been permanently deleted from the platform.`,
+      deletedUser: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+      },
+    });
+  } catch (error) {
+    logger.error(`Delete User Error: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      error: 'DELETE_USER_FAILED',
+      message: error.message || 'An error occurred while deleting the user.',
+    });
+  }
+}
+

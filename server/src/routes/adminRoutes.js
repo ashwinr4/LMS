@@ -11,6 +11,7 @@ import {
   updateModeratorPermissions,
   getModeratorPermissionHistory,
   bulkImportUsers,
+  deleteUser,
   listAllCourses,
   updateCourseStatus,
   runExpirationSweep,
@@ -39,6 +40,7 @@ router.put('/users/:id', updateUserDetail);
 router.patch('/users/:id/status', updateUserStatus);
 router.patch('/users/:id/role', updateUserRole);
 router.post('/users/:id/reset-password', resetUserPassword);
+router.delete('/users/:id', deleteUser);
 router.put('/users/:id/moderator-permissions', updateModeratorPermissions);
 router.get('/users/:id/moderator-permissions/history', getModeratorPermissionHistory);
 router.post('/users/bulk-import', upload.single('file'), bulkImportUsers);

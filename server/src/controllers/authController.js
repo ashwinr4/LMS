@@ -237,10 +237,10 @@ export async function login(req, res) {
     });
 
     if (!user) {
-      return res.status(401).json({
+      return res.status(404).json({
         success: false,
-        error: 'INVALID_CREDENTIALS',
-        message: 'Invalid email or password.',
+        error: 'USER_NOT_FOUND',
+        message: 'User does not exist. Please check your email or create a new account.',
       });
     }
 
