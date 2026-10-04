@@ -6,8 +6,10 @@ import {
   rejectTransfer,
 } from '../controllers/transferController.js';
 import { authenticateToken, requireRoles } from '../middleware/auth.js';
+import { validateId } from '../middleware/validate.js';
 
 const router = express.Router();
+router.param('id', (req, res, next) => validateId('id')(req, res, next));
 
 router.use(authenticateToken);
 

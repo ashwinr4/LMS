@@ -1,0 +1,4725 @@
+openapi: 3.0.3
+info:
+  title: Qualiva - Enterprise Secure Module Management System (ESMMS) API
+  description: |
+    Comprehensive OpenAPI 3.x specification for the Qualiva ESMMS backend services.
+    Generated strictly via comprehensive source code inspection of `server/src` for API security auditing with OWASP ZAP.
+    
+    Includes role-based access control (RBAC), multi-engine database proxies, granular moderator permissions,
+    proctored assessment workflows, and real-time enterprise communication endpoints.
+  version: 1.0.0
+servers:
+  - url: http://host.docker.internal:5050
+    description: Local development backend server
+  - url: /
+    description: Current host relative path
+
+tags:
+  - name: System & Health
+    description: Core platform health and gateway metadata
+  - name: Authentication & Profile
+    description: Dual-token authentication, 2FA OTP, Google SSO, and profile management
+  - name: Course Modules
+    description: Course catalog, multi-modal curriculum, and progress tracking
+  - name: Course Enrollments
+    description: 3-stage enrollment workflow (Application -> Creator Endorsement -> Admin Approval)
+  - name: Assessments & Exams
+    description: Question bank, secure document question extraction, and proctored examination engine
+  - name: Certificates
+    description: Cryptographic certificate verification and student certificate records
+  - name: Admin Management
+    description: User directory, bulk XLSX onboarding, role governance, and audit trails
+  - name: Admin Settings
+    description: Database engine switching, runtime hot-swap, and connection tests
+  - name: Moderator Operations
+    description: Operational moderator endpoints restricted by granular capabilities
+  - name: Real-Time Chat & Inbox
+    description: System announcements, community support desk, and direct messaging
+  - name: Notifications
+    description: User-level and role-targeted persistent notifications
+  - name: Transfers & SLA
+    description: Course transfer and deadline extension requests
+
+paths:
+  # =========================================================================
+  # System & Gateway Health
+  # =========================================================================
+  /health:
+    get:
+      tags:
+        - System & Health
+      summary: Root Cloud Health Check
+      description: Basic service liveness and uptime check used by reverse proxies and cloud container health probes.
+      operationId: getCloudHealth
+      responses:
+        '200':
+          description: Service is healthy and operational.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "OK"
+                  uptime:
+                    type: integer
+                    example: 3600
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /api/v1/health:
+    get:
+      tags:
+        - System & Health
+      summary: API Gateway Health & Diagnostics
+      description: Detailed system health diagnostics reporting uptime, system name, version, and RAM usage in megabytes.
+      operationId: getApiV1Health
+      responses:
+        '200':
+          description: Diagnostic metrics retrieved successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "online"
+                  system:
+                    type: string
+                    example: "Enterprise Secure Module Management System (ESMMS)"
+                  version:
+                    type: string
+                    example: "1.0.0"
+                  timestamp:
+                    type: string
+                    format: date-time
+                  uptimeSeconds:
+                    type: integer
+                    example: 1240
+                  memoryUsageMB:
+                    type: integer
+                    example: 64
+
+  /api/v1:
+    get:
+      tags:
+        - System & Health
+      summary: API Gateway Welcome & Discovery
+      description: Public discovery root listing top-level service endpoint mount paths.
+      operationId: getApiV1Root
+      responses:
+        '200':
+          description: API directory listing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  documentation:
+                    type: string
+                  endpoints:
+                    type: object
+                    additionalProperties:
+                      type: string
+
+  # =========================================================================
+  # Authentication & Identity Routes
+  # =========================================================================
+  /api/v1/auth/register:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Register New Account
+      description: |
+        Registers a new enterprise account. If `role` is specified as `MODERATOR`,
+        the account is placed in `PENDING_APPROVAL` status awaiting administrator verification and permission assignment.
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+                - password
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  example: "Sarah Connor"
+                email:
+                  type: string
+                  format: email
+                  example: "sarah.connor@qualiva.io"
+                password:
+                  type: string
+                  minLength: 8
+                  example: "SecureP@ss2026!"
+                department:
+                  type: string
+                  example: "Engineering"
+                role:
+                  type: string
+                  enum: [USER, COURSE_CREATOR, MODERATOR, ADMIN]
+                  default: USER
+      responses:
+        '201':
+          description: User registered successfully or queued for approval.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  pendingApproval:
+                    type: boolean
+                  user:
+                    $ref: '#/components/schemas/UserSummary'
+                  accessToken:
+                    type: string
+        '400':
+          description: Validation error on input fields.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Email address already registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal registration error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/login:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Authenticate User Credentials (Step 1)
+      description: |
+        Verifies corporate email and password. Enforces brute-force lockout policy (locks for 15 minutes after 5 consecutive failures).
+        On successful credential verification, generates and dispatches a 6-digit 2FA OTP to the user's email.
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "david.kim@qualiva.io"
+                password:
+                  type: string
+                  example: "Password123!"
+      responses:
+        '200':
+          description: Credentials valid; 6-digit OTP passcode dispatched.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  requiresOtp:
+                    type: boolean
+                    example: true
+                  email:
+                    type: string
+                  mustChangePassword:
+                    type: boolean
+                  message:
+                    type: string
+        '401':
+          description: Invalid email or password, or temporary password required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Account suspended or pending administrator approval.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User account does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '423':
+          description: Account locked due to repeated failed login attempts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/verify-otp:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Verify 2FA OTP Passcode (Step 2)
+      description: |
+        Validates the 6-digit OTP code dispatched during credential login.
+        Upon verification, sets an HttpOnly `esmms_refresh_token` cookie and returns a signed JWT access token.
+      operationId: verifyLoginOtp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - otp
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "david.kim@qualiva.io"
+                otp:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+                  example: "582914"
+      responses:
+        '200':
+          description: 2FA verified successfully; JWT access token returned.
+          headers:
+            Set-Cookie:
+              description: HttpOnly refresh token cookie (`esmms_refresh_token`)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserDetail'
+                  accessToken:
+                    type: string
+        '400':
+          description: Invalid or expired OTP code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error during verification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/request-otp:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Request 2FA OTP Resend
+      description: Generates a new 6-digit OTP and dispatches it to the requested email.
+      operationId: requestOtpResend
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "david.kim@qualiva.io"
+      responses:
+        '200':
+          description: OTP dispatched successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+        '404':
+          description: User account not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/google:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Google Single Sign-On (SSO)
+      description: |
+        Authenticates via Google OAuth ID token or profile object.
+        Supports automatic new member onboarding, role selection, and OTP verification for newly onboarded SSO accounts.
+      operationId: googleLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                credential:
+                  type: string
+                  description: Google ID token (JWT)
+                profile:
+                  type: object
+                  properties:
+                    email:
+                      type: string
+                    name:
+                      type: string
+                    avatar:
+                      type: string
+                role:
+                  type: string
+                  enum: [USER, COURSE_CREATOR, MODERATOR, ADMIN]
+                department:
+                  type: string
+                otpCode:
+                  type: string
+      responses:
+        '200':
+          description: Authenticated or onboarding prompt returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  requiresOnboarding:
+                    type: boolean
+                  requiresOtp:
+                    type: boolean
+                  googleProfile:
+                    type: object
+                  user:
+                    $ref: '#/components/schemas/UserSummary'
+                  accessToken:
+                    type: string
+        '400':
+          description: Invalid Google token or expired onboarding OTP.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Account locked or suspended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/refresh:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Refresh Access Token
+      description: |
+        Dual-token rotation endpoint. Reads `esmms_refresh_token` from cookies,
+        revokes the old session token (one-time use), generates a new session and returns a fresh JWT access token.
+      operationId: refreshSessionToken
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: New access token generated and refresh token rotated in cookie.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  accessToken:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserSummary'
+        '401':
+          description: Refresh token missing, expired, or revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/logout:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Logout & Revoke Active Session
+      description: Invalidates active session hash in the database, clears the refresh token cookie, and records audit trail.
+      operationId: logoutUser
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Successfully logged out.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+
+  /api/v1/auth/request-password-reset:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Request Account Password Reset
+      description: Flag account for administrative credential reset and emit real-time notification to Administrators. Returns generic success to prevent email enumeration.
+      operationId: requestPasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "david.kim@qualiva.io"
+      responses:
+        '200':
+          description: Reset request acknowledged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+        '400':
+          description: Email address missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/change-password:
+    post:
+      tags:
+        - Authentication & Profile
+      summary: Change Password / Establish Permanent Credentials
+      description: Allows authenticated user to update their permanent password, clearing the `mustChangePassword` flag.
+      operationId: changePassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - newPassword
+              properties:
+                newPassword:
+                  type: string
+                  minLength: 6
+                  example: "NewPermanentPass2026!"
+      responses:
+        '200':
+          description: Permanent password set successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserSummary'
+        '400':
+          description: Password must be at least 6 characters long.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/me:
+    get:
+      tags:
+        - Authentication & Profile
+      summary: Get Current User Profile
+      description: Returns profile, RBAC role, account status, and configured moderator permissions for the authenticated caller.
+      operationId: getCurrentUserProfile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Profile retrieved successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  user:
+                    $ref: '#/components/schemas/UserDetail'
+        '401':
+          description: Missing, invalid, or expired access token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/profile:
+    get:
+      tags:
+        - Authentication & Profile
+      summary: Get Profile Alias
+      description: Alias to `/api/v1/auth/me`.
+      operationId: getProfileAlias
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Profile retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    $ref: '#/components/schemas/UserDetail'
+    put:
+      tags:
+        - Authentication & Profile
+      summary: Update Personal Profile
+      description: Updates display name or profile avatar image URL.
+      operationId: updateProfile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 2
+                  example: "Sarah Connor"
+                avatar:
+                  type: string
+                  nullable: true
+                  example: "https://example.com/avatar.jpg"
+      responses:
+        '200':
+          description: Profile updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserDetail'
+        '400':
+          description: Invalid name or input parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # =========================================================================
+  # Course Modules & Curriculum
+  # =========================================================================
+  /api/v1/modules:
+    get:
+      tags:
+        - Course Modules
+      summary: List Course Modules (Public Catalog)
+      description: Returns active curriculum modules with caching support.
+      operationId: listModules
+      parameters:
+        - name: department
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVE, DRAFT, ARCHIVED, DEPRECATED]
+            default: ACTIVE
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACADEMY_COURSE, WORK_MODULE]
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Module catalog list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  modules:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ModuleSummary'
+    post:
+      tags:
+        - Course Modules
+      summary: Create Course Module
+      description: Provision a new curriculum course module in `DRAFT` status.
+      operationId: createModule
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+                - title
+                - department
+              properties:
+                code:
+                  type: string
+                  example: "CS-401"
+                title:
+                  type: string
+                  example: "Advanced Cloud Security Engineering"
+                description:
+                  type: string
+                department:
+                  type: string
+                  example: "Information Security"
+                level:
+                  type: string
+                  enum: [Beginner, Intermediate, Advanced]
+                  default: Beginner
+                duration:
+                  type: string
+                  example: "8 Weeks"
+                type:
+                  type: string
+                  enum: [ACADEMY_COURSE, WORK_MODULE]
+                  default: ACADEMY_COURSE
+                outcomes:
+                  type: array
+                  items:
+                    type: string
+                prerequisites:
+                  type: array
+                  items:
+                    type: string
+                expiresMonths:
+                  type: integer
+                  default: 12
+      responses:
+        '201':
+          description: Module created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  module:
+                    $ref: '#/components/schemas/ModuleDetail'
+        '400':
+          description: Missing code, title, or department.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Module code already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/modules/upload-media:
+    post:
+      tags:
+        - Course Modules
+      summary: Upload Lecture Media (Video, Documents, PDFs)
+      description: Multer-based multipart file upload for lesson content up to 1GB.
+      operationId: uploadLessonMedia
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Media uploaded successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  fileUrl:
+                    type: string
+                    example: "/uploads/lessons/1740000000-lecture.mp4"
+                  filename:
+                    type: string
+                  originalName:
+                    type: string
+                  size:
+                    type: integer
+                  mimetype:
+                    type: string
+        '400':
+          description: No file uploaded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/modules/my-courses:
+    get:
+      tags:
+        - Course Modules
+      summary: Get Enrolled Courses for Current Student
+      description: Returns all enrolled courses, progress percentages, and last active learning position for the caller.
+      operationId: getMyEnrolledCourses
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Enrolled courses retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  assignments:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        moduleId:
+                          type: string
+                        code:
+                          type: string
+                        title:
+                          type: string
+                        progress:
+                          type: integer
+                        status:
+                          type: string
+                        dueDate:
+                          type: string
+                          format: date-time
+                        completedLessonsCount:
+                          type: integer
+                        totalLessons:
+                          type: integer
+                        lastActive:
+                          type: object
+
+  /api/v1/modules/{id}:
+    get:
+      tags:
+        - Course Modules
+      summary: Get Single Module with Curriculum
+      description: Returns full course metadata, sections, lessons, and assessment thresholds.
+      operationId: getModuleById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Full curriculum retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  module:
+                    $ref: '#/components/schemas/ModuleDetail'
+        '404':
+          description: Module not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Course Modules
+      summary: Update Course Module
+      description: Updates course title, description, outcomes, prerequisites, or status.
+      operationId: updateModule
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Module updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  module:
+                    $ref: '#/components/schemas/ModuleDetail'
+        '403':
+          description: Forbidden role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Course Modules
+      summary: Delete Course Module
+      description: Deletes a module and cascades to all child sections and lessons.
+      operationId: deleteModule
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Module deleted successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+        '403':
+          description: Forbidden role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/modules/{id}/progress:
+    get:
+      tags:
+        - Course Modules
+      summary: Get Student Module Progress
+      description: Retrieves the current student's progress and completed lesson keys for a specific module.
+      operationId: getModuleProgress
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Progress statistics retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  enrolled:
+                    type: boolean
+                  progress:
+                    type: integer
+                  status:
+                    type: string
+                  dueDate:
+                    type: string
+                    format: date-time
+                  completedLessons:
+                    type: array
+                    items:
+                      type: string
+                  lastActive:
+                    type: object
+
+  /api/v1/modules/lessons/{lessonId}/complete:
+    post:
+      tags:
+        - Course Modules
+      summary: Complete Lecture / Save Playback Position
+      description: |
+        Marks a lesson completed or saves the current playback timestamp.
+        Enforces strict sequential completion: the previous lesson must be completed before unlocking the next.
+      operationId: completeLesson
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: lessonId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - moduleId
+                - sectionIdx
+                - lessonIdx
+              properties:
+                moduleId:
+                  type: string
+                sectionIdx:
+                  type: integer
+                lessonIdx:
+                  type: integer
+                timestamp:
+                  type: number
+                markAsFinished:
+                  type: boolean
+      responses:
+        '200':
+          description: Lesson progress saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  progress:
+                    type: integer
+                  completedLessons:
+                    type: array
+                    items:
+                      type: string
+                  isCompleted:
+                    type: boolean
+                  assignment:
+                    type: object
+        '403':
+          description: Previous lesson not completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No active assignment found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/modules/{id}/sections:
+    post:
+      tags:
+        - Course Modules
+      summary: Add Section to Module
+      description: Appends a new section chapter to the curriculum.
+      operationId: createSection
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Module ID
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+              properties:
+                title:
+                  type: string
+                  example: "Module 1: Foundations of Zero Trust"
+      responses:
+        '201':
+          description: Section created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  section:
+                    $ref: '#/components/schemas/Section'
+        '400':
+          description: Title is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/modules/{id}/sections/{sectionId}:
+    put:
+      tags:
+        - Course Modules
+      summary: Update Section
+      description: Updates section title or display order.
+      operationId: updateSection
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sectionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Section updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  section:
+                    $ref: '#/components/schemas/Section'
+    delete:
+      tags:
+        - Course Modules
+      summary: Delete Section
+      description: Deletes section and all nested lessons.
+      operationId: deleteSection
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: sectionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Section deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+
+  /api/v1/modules/sections/{sectionId}/lessons:
+    post:
+      tags:
+        - Course Modules
+      summary: Add Lesson to Section
+      description: Appends a lesson (video, markdown, document, or quiz) to a curriculum section.
+      operationId: createLesson
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: sectionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+                - type
+              properties:
+                title:
+                  type: string
+                  example: "Introduction to Identity Provider Architecture"
+                type:
+                  type: string
+                  enum: [VIDEO, YOUTUBE, TEXT, MARKDOWN, DOCUMENT, QUIZ]
+                  default: VIDEO
+                videoUrl:
+                  type: string
+                content:
+                  type: string
+                documentName:
+                  type: string
+                duration:
+                  type: string
+                notes:
+                  type: string
+      responses:
+        '201':
+          description: Lesson created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  lesson:
+                    $ref: '#/components/schemas/Lesson'
+        '400':
+          description: Missing title or type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/modules/lessons/{lessonId}:
+    put:
+      tags:
+        - Course Modules
+      summary: Update Lesson
+      description: Updates lecture metadata, URLs, content, or duration.
+      operationId: updateLesson
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: lessonId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Lesson updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  lesson:
+                    $ref: '#/components/schemas/Lesson'
+    delete:
+      tags:
+        - Course Modules
+      summary: Delete Lesson
+      description: Permanently removes a lesson.
+      operationId: deleteLesson
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: lessonId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Lesson deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+
+  # =========================================================================
+  # Course Enrollments
+  # =========================================================================
+  /api/v1/enrollments/request:
+    post:
+      tags:
+        - Course Enrollments
+      summary: Submit Enrollment Application (Stage 1)
+      description: Student applies for module enrollment, initiating the approval workflow.
+      operationId: requestEnrollment
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - moduleId
+              properties:
+                moduleId:
+                  type: string
+                studentReason:
+                  type: string
+                urgency:
+                  type: string
+                  enum: [Low, Normal, High, Urgent]
+                  default: Normal
+      responses:
+        '201':
+          description: Application submitted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  request:
+                    $ref: '#/components/schemas/EnrollmentRequest'
+        '400':
+          description: Already enrolled or invalid request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Course module not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/enrollments/my-requests:
+    get:
+      tags:
+        - Course Enrollments
+      summary: Get Student Enrollment History
+      description: Returns all pending and past enrollment applications for the caller.
+      operationId: getMyEnrollmentRequests
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Applications list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EnrollmentRequest'
+
+  /api/v1/enrollments/status/{moduleId}:
+    get:
+      tags:
+        - Course Enrollments
+      summary: Check Enrollment Status for Specific Module
+      description: Returns whether student is active, pending creator review, forwarded to admin, or not enrolled.
+      operationId: getModuleEnrollmentStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: moduleId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Enrollment status report.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  enrolled:
+                    type: boolean
+                  status:
+                    type: string
+                  assignment:
+                    type: object
+                  request:
+                    $ref: '#/components/schemas/EnrollmentRequest'
+
+  /api/v1/enrollments/creator-queue:
+    get:
+      tags:
+        - Course Enrollments
+      summary: Get Instructor Pending Applications Queue
+      description: Lists all student enrollment applications awaiting instructor endorsement.
+      operationId: getCreatorQueue
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      responses:
+        '200':
+          description: Creator queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EnrollmentRequest'
+
+  /api/v1/enrollments/creator-queue-count:
+    get:
+      tags:
+        - Course Enrollments
+      summary: Get Fast Creator Queue Count
+      description: Indexed count of pending applications for sidebar badges.
+      operationId: getCreatorQueueCount
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      responses:
+        '200':
+          description: Count retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+
+  /api/v1/enrollments/{id}/forward:
+    patch:
+      tags:
+        - Course Enrollments
+      summary: Endorse & Forward Application to Admin (Stage 2)
+      description: Instructor endorses the application with optional recommendation notes and routes to the Admin Approvals Hub.
+      operationId: forwardEnrollmentToAdmin
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                creatorRecommendation:
+                  type: string
+                  example: "Verified student completed prerequisite track."
+      responses:
+        '200':
+          description: Forwarded to Admin.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  request:
+                    $ref: '#/components/schemas/EnrollmentRequest'
+        '400':
+          description: Request not in PENDING_CREATOR status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Request not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/enrollments/admin-queue:
+    get:
+      tags:
+        - Course Enrollments
+      summary: Get Admin Approvals Queue (Stage 3)
+      description: Lists requests awaiting administrator final authorization and provisioning.
+      operationId: getAdminEnrollmentQueue
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            default: FORWARDED_TO_ADMIN
+      responses:
+        '200':
+          description: Approvals queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EnrollmentRequest'
+
+  /api/v1/enrollments/{id}/approve:
+    patch:
+      tags:
+        - Course Enrollments
+      summary: Approve Application & Provision Course Assignment
+      description: Administrator authorizes enrollment and creates the student's active course assignment with deadline.
+      operationId: approveEnrollment
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                adminNotes:
+                  type: string
+                  example: "Approved with standard 14-day SLA deadline."
+                dueDateDays:
+                  type: integer
+                  default: 14
+      responses:
+        '200':
+          description: Enrollment approved and assignment provisioned.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  request:
+                    $ref: '#/components/schemas/EnrollmentRequest'
+                  assignment:
+                    type: object
+        '400':
+          description: Already approved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Request not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/enrollments/{id}/reject:
+    patch:
+      tags:
+        - Course Enrollments
+      summary: Decline Enrollment Application
+      description: Instructor or Administrator rejects an enrollment application.
+      operationId: rejectEnrollment
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rejectionReason:
+                  type: string
+                  example: "Prerequisite documentation missing."
+      responses:
+        '200':
+          description: Application rejected.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  request:
+                    $ref: '#/components/schemas/EnrollmentRequest'
+
+  # =========================================================================
+  # Assessments & Proctored Exam Engine
+  # =========================================================================
+  /api/v1/assessments/extract:
+    post:
+      tags:
+        - Assessments & Exams
+      summary: AI & Document Question Extraction
+      description: |
+        Uploads PDF, DOCX, or text file up to 50MB. Runs a 4-stage anti-malware and security verification scan,
+        extracts raw text, and parses multiple-choice questions into structured JSON.
+      operationId: extractQuestionsFromDocument
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Questions successfully parsed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  filename:
+                    type: string
+                  questionCount:
+                    type: integer
+                  questions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Question'
+        '400':
+          description: Security alert (malicious payload detected) or unreadable document.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/assessments/my-exams:
+    get:
+      tags:
+        - Assessments & Exams
+      summary: List Student Exams & Unlock Status
+      description: Returns all exams for student's enrolled courses. Indicates whether 80% curriculum completion requirement is met.
+      operationId: getMyExams
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Exams retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  exams:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        moduleId:
+                          type: string
+                        moduleCode:
+                          type: string
+                        moduleTitle:
+                          type: string
+                        title:
+                          type: string
+                        passingScore:
+                          type: integer
+                        durationMinutes:
+                          type: integer
+                        isUnlocked:
+                          type: boolean
+                        courseProgress:
+                          type: integer
+                        lastSubmission:
+                          type: object
+
+  /api/v1/assessments/{id}/start:
+    get:
+      tags:
+        - Assessments & Exams
+      summary: Launch Proctored Examination Session
+      description: |
+        Starts exam session. Enforces anti-cheat cooldowns (7-day lockout for 3 tab/focus violations).
+        Draws dynamic sample of questions, prioritizing questions not seen in previous attempts,
+        and strips `correctAnswer` and `explanation` from response payload.
+      operationId: startExam
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Exam session initiated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  session:
+                    type: object
+                    properties:
+                      assessmentId:
+                        type: string
+                      moduleId:
+                        type: string
+                      courseTitle:
+                        type: string
+                      durationMinutes:
+                        type: integer
+                      passingScore:
+                        type: integer
+                      totalPoints:
+                        type: integer
+                      questionIds:
+                        type: array
+                        items:
+                          type: string
+                      questions:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/SanitizedQuestion'
+        '403':
+          description: Exam locked (<80% progress) or active security cooldown.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Assessment not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/assessments/{id}/submit:
+    post:
+      tags:
+        - Assessments & Exams
+      summary: Submit Proctored Exam Answers
+      description: |
+        Server-side grading, proctoring violation evaluation, and automatic cryptographic certificate issuance on pass.
+        If 3 or more security violations occur, automatically disqualifies candidate and triggers a 7-day retake cooldown.
+      operationId: submitExam
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - questionIds
+              properties:
+                answers:
+                  type: object
+                  additionalProperties:
+                    oneOf:
+                      - type: integer
+                      - type: string
+                      - type: array
+                        items:
+                          type: string
+                questionIds:
+                  type: array
+                  items:
+                    type: string
+                violations:
+                  type: array
+                  items:
+                    type: object
+                disqualified:
+                  type: boolean
+      responses:
+        '200':
+          description: Examination graded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  isDisqualified:
+                    type: boolean
+                  message:
+                    type: string
+                  result:
+                    type: object
+                  certificate:
+                    $ref: '#/components/schemas/Certificate'
+        '404':
+          description: Assessment not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/assessments/{id}/exit:
+    post:
+      tags:
+        - Assessments & Exams
+      summary: Voluntarily Exit Exam Session
+      description: Records an abandoned exam attempt in the audit trail.
+      operationId: exitExam
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                questionIds:
+                  type: array
+                  items:
+                    type: string
+                answers:
+                  type: object
+      responses:
+        '200':
+          description: Exam exit acknowledged.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  cooldownExpiresAt:
+                    type: string
+                    format: date-time
+
+  /api/v1/assessments:
+    get:
+      tags:
+        - Assessments & Exams
+      summary: List Question Banks & Assessments
+      description: Creator and Admin overview of assessment question banks.
+      operationId: listAssessments
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: moduleId
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Assessment banks retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                  assessments:
+                    type: array
+                    items:
+                      type: object
+    post:
+      tags:
+        - Assessments & Exams
+      summary: Create Assessment Question Bank
+      description: Configures new assessment with questions, passing threshold, and time limit.
+      operationId: createAssessment
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - moduleId
+                - title
+              properties:
+                moduleId:
+                  type: string
+                title:
+                  type: string
+                description:
+                  type: string
+                passingScore:
+                  type: integer
+                  default: 70
+                sampleSize:
+                  type: integer
+                  default: 10
+                durationMinutes:
+                  type: integer
+                  default: 45
+                randomizeQuestions:
+                  type: boolean
+                  default: true
+                questions:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Question'
+      responses:
+        '201':
+          description: Assessment created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  assessment:
+                    type: object
+
+  /api/v1/assessments/{id}:
+    get:
+      tags:
+        - Assessments & Exams
+      summary: Get Assessment Details with Questions
+      description: Returns full assessment definition including correct answers for creator editing.
+      operationId: getAssessmentById
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Assessment definition retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  assessment:
+                    type: object
+        '404':
+          description: Assessment not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Assessments & Exams
+      summary: Update Assessment Question Bank
+      description: Update thresholds, time limit, question pools, or status.
+      operationId: updateAssessment
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Assessment updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  assessment:
+                    type: object
+    delete:
+      tags:
+        - Assessments & Exams
+      summary: Delete Assessment Question Bank
+      description: Permanently removes assessment and associated submission records.
+      operationId: deleteAssessment
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - COURSE_CREATOR
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Assessment deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+
+  # =========================================================================
+  # Cryptographic Certificates
+  # =========================================================================
+  /api/v1/certificates/verify/{code}:
+    get:
+      tags:
+        - Certificates
+      summary: Public Certificate Verification
+      description: Publicly verifies the cryptographic authenticity and integrity of a Qualiva completion certificate via SHA-256 hash.
+      operationId: verifyCertificateByCode
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: Certificate verification identifier (e.g. ESMMS-CERT-2026-A1B2C3)
+          schema:
+            type: string
+            example: "ESMMS-CERT-2026-F9B2C1"
+      responses:
+        '200':
+          description: Certificate verified authentic.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  certificate:
+                    $ref: '#/components/schemas/Certificate'
+        '404':
+          description: Certificate code does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/certificates/my-certificates:
+    get:
+      tags:
+        - Certificates
+      summary: Get Student Issued Certificates
+      description: Returns all verified completion certificates issued to the authenticated student.
+      operationId: getMyCertificates
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Certificate list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  count:
+                    type: integer
+                  certificates:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Certificate'
+
+  # =========================================================================
+  # Admin Management & Governance
+  # =========================================================================
+  /api/v1/admin/dashboard-summary:
+    get:
+      tags:
+        - Admin Management
+      summary: Live Admin Dashboard Overview & KPIs
+      description: Returns real-time platform statistics (provisioned users, active modules, pending approvals, daily audits).
+      operationId: getAdminDashboardSummary
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      responses:
+        '200':
+          description: Dashboard KPIs retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  stats:
+                    type: object
+                  recentApprovals:
+                    type: array
+                    items:
+                      type: object
+                  recentActivity:
+                    type: array
+                    items:
+                      type: object
+
+  /api/v1/admin/badge-counts:
+    get:
+      tags:
+        - Admin Management
+      summary: Fast Admin Sidebar Badge Counts
+      description: Indexed query for pending approvals, moderator requests, and credential reset requests.
+      operationId: getAdminBadgeCounts
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      responses:
+        '200':
+          description: Badge counts retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  counts:
+                    type: object
+                    properties:
+                      pendingApprovals:
+                        type: integer
+                      pendingEnrollmentApprovals:
+                        type: integer
+                      pendingModerators:
+                        type: integer
+                      passwordResetRequests:
+                        type: integer
+
+  /api/v1/admin/users:
+    get:
+      tags:
+        - Admin Management
+      summary: List Enterprise User Directory
+      description: Paginated directory of platform accounts with status, department, and role filtering.
+      operationId: adminListUsers
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: department
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: User directory page.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserDetail'
+                  pagination:
+                    type: object
+                  stats:
+                    type: object
+    post:
+      tags:
+        - Admin Management
+      summary: Provision Enterprise User Account
+      description: Manually creates an employee account with a temporary password and forces reset upon first login.
+      operationId: adminCreateUser
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - name
+              properties:
+                email:
+                  type: string
+                  format: email
+                name:
+                  type: string
+                role:
+                  type: string
+                  enum: [USER, COURSE_CREATOR, MODERATOR, ADMIN]
+                  default: USER
+                department:
+                  type: string
+                temporaryPassword:
+                  type: string
+                phone:
+                  type: string
+                location:
+                  type: string
+      responses:
+        '201':
+          description: User provisioned.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserSummary'
+        '409':
+          description: Email already in use.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/users/{id}:
+    get:
+      tags:
+        - Admin Management
+      summary: Get Full User Profile & Records
+      description: Retrieves complete user records including enrolled courses, exam submissions, and certificates.
+      operationId: adminGetUserDetail
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User detail.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    $ref: '#/components/schemas/UserDetail'
+        '403':
+          description: Restricted access.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Admin Management
+      summary: Update User Records & Security Flags
+      description: Updates user attributes, contact details, reset lockout status, or sets a temporary password.
+      operationId: adminUpdateUserDetail
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                department:
+                  type: string
+                phone:
+                  type: string
+                location:
+                  type: string
+                role:
+                  type: string
+                  enum: [USER, COURSE_CREATOR, MODERATOR, ADMIN]
+                status:
+                  type: string
+                  enum: [ACTIVE, LOCKED, SUSPENDED, PENDING_APPROVAL]
+                mustChangePassword:
+                  type: boolean
+                resetLockout:
+                  type: boolean
+                temporaryPassword:
+                  type: string
+      responses:
+        '200':
+          description: User updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserDetail'
+        '400':
+          description: Self-lockout or self-demotion forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Admin Management
+      summary: Permanently Remove User Account
+      description: |
+        Deletes a user account and cascades all associated records across both primary and backup databases.
+        Dispatches an enterprise account closure email to the user. Admins cannot delete their own account.
+      operationId: adminDeleteUser
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User permanently removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                  deletedUser:
+                    type: object
+        '400':
+          description: Self-deletion forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/users/{id}/status:
+    patch:
+      tags:
+        - Admin Management
+      summary: Update User Status (Lock/Suspend/Activate)
+      description: Changes account status. Automatically revokes active JWT sessions when locking or suspending.
+      operationId: adminUpdateUserStatus
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+              properties:
+                status:
+                  type: string
+                  enum: [ACTIVE, LOCKED, SUSPENDED, PENDING_APPROVAL]
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Status updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserSummary'
+        '400':
+          description: Invalid status or self-lockout forbidden.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/users/{id}/role:
+    patch:
+      tags:
+        - Admin Management
+      summary: Modify User RBAC Role
+      description: Promotes or reassigns user role and broadcasts real-time socket events.
+      operationId: adminUpdateUserRole
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - role
+              properties:
+                role:
+                  type: string
+                  enum: [USER, COURSE_CREATOR, MODERATOR, ADMIN]
+      responses:
+        '200':
+          description: Role updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserSummary'
+
+  /api/v1/admin/users/{id}/reset-password:
+    post:
+      tags:
+        - Admin Management
+      summary: Trigger Administrative Password Reset
+      description: Generates a randomized temporary password, sets `mustChangePassword=true`, and emails credentials to the user.
+      operationId: adminResetUserPassword
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                newPassword:
+                  type: string
+                  description: Optional explicit temporary password override
+      responses:
+        '200':
+          description: Password reset successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  temporaryPassword:
+                    type: string
+
+  /api/v1/admin/users/{id}/moderator-permissions:
+    put:
+      tags:
+        - Admin Management
+      summary: Configure Moderator Operational Permissions
+      description: |
+        Configures granular module capabilities (`view`, `manage`, `approve`) for a Moderator account,
+        records diffs into the security audit trail, and synchronizes real-time permissions.
+      operationId: adminUpdateModeratorPermissions
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - permissions
+              properties:
+                permissions:
+                  $ref: '#/components/schemas/ModeratorPermissions'
+                activate:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Moderator permissions applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/UserDetail'
+                  changesCount:
+                    type: integer
+
+  /api/v1/admin/users/{id}/moderator-permissions/history:
+    get:
+      tags:
+        - Admin Management
+      summary: Get Moderator Permission Audit History
+      description: Returns immutable audit trail of capability changes configured for this moderator.
+      operationId: adminGetModeratorPermissionHistory
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Permission audit history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  history:
+                    type: array
+                    items:
+                      type: object
+
+  /api/v1/admin/users/bulk-import:
+    post:
+      tags:
+        - Admin Management
+      summary: Bulk XLSX / CSV Employee Import
+      description: |
+        Supports dry-run validation mode (`dryRun=true`) and live execution (`dryRun=false`).
+        Accepts multipart file or JSON array, validates email format and duplicate records.
+      operationId: adminBulkImportUsers
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                dryRun:
+                  type: boolean
+                  default: true
+                defaultRole:
+                  type: string
+                  default: USER
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun:
+                  type: boolean
+                  default: true
+                defaultRole:
+                  type: string
+                  default: USER
+                users:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Dry-run validation report.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  mode:
+                    type: string
+                    example: "DRY_RUN"
+                  summary:
+                    type: object
+                  rows:
+                    type: array
+                    items:
+                      type: object
+        '201':
+          description: Users imported in live mode.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  mode:
+                    type: string
+                    example: "EXECUTE"
+                  summary:
+                    type: object
+                  createdUsers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserSummary'
+
+  /api/v1/admin/courses:
+    get:
+      tags:
+        - Admin Management
+      summary: List Course Lifecycle & Expiration Overview
+      description: Returns courses with automatic 12-month expiration dates and countdowns.
+      operationId: adminListCourses
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      responses:
+        '200':
+          description: Courses retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                  courses:
+                    type: array
+                    items:
+                      type: object
+
+  /api/v1/admin/courses/{id}/status:
+    patch:
+      tags:
+        - Admin Management
+      summary: Update Course Lifecycle Status & Expiration Extension
+      description: Update status (DRAFT | ACTIVE | ARCHIVED | DEPRECATED) or extend expiration months.
+      operationId: adminUpdateCourseStatus
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [DRAFT, ACTIVE, ARCHIVED, DEPRECATED]
+                extendMonths:
+                  type: integer
+                  example: 6
+                expiresAt:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Course lifecycle updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  module:
+                    $ref: '#/components/schemas/ModuleDetail'
+
+  /api/v1/admin/courses/check-expirations:
+    post:
+      tags:
+        - Admin Management
+      summary: Execute Automatic Expiration Sweep
+      description: Sweeps active courses and archives those past their 12-month expiration threshold.
+      operationId: adminRunExpirationSweep
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      responses:
+        '200':
+          description: Expiration sweep executed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  archivedCount:
+                    type: integer
+
+  /api/v1/admin/audit-logs:
+    get:
+      tags:
+        - Admin Management
+      summary: List Immutable Security Audit Logs
+      description: Returns platform audit logs filtered by risk level (LOW, MEDIUM, HIGH) or action.
+      operationId: adminListAuditLogs
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      parameters:
+        - name: riskLevel
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ALL, LOW, MEDIUM, HIGH]
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Audit logs list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  logs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLog'
+                  pagination:
+                    type: object
+                  stats:
+                    type: object
+
+  # =========================================================================
+  # Admin Settings & Database Management
+  # =========================================================================
+  /api/v1/admin/settings/database:
+    get:
+      tags:
+        - Admin Settings
+      summary: Get Multi-Engine Database Configuration
+      description: Retrieves primary and backup database connection metadata (with passwords masked), latency, and engine labels.
+      operationId: adminGetDatabaseSettings
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      responses:
+        '200':
+          description: Database settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  activeEngines:
+                    type: object
+                  settings:
+                    type: object
+    put:
+      tags:
+        - Admin Settings
+      summary: Update Database Connection Endpoints
+      description: Performs pre-flight connectivity verification, updates runtime connection proxy, and writes configuration to environment file.
+      operationId: adminUpdateDatabaseSettings
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - primaryUrl
+              properties:
+                primaryUrl:
+                  type: string
+                  example: "postgresql://user:pass@ep-qualiva.neon.tech/neondb"
+                backupUrl:
+                  type: string
+                  example: "mongodb+srv://user:pass@cluster0.mongodb.net/esmms"
+      responses:
+        '200':
+          description: Database configuration updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  settings:
+                    type: object
+        '400':
+          description: Connection verification failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/settings/database/test:
+    post:
+      tags:
+        - Admin Settings
+      summary: Pre-Flight Database Connection Test
+      description: Tests multi-engine connectivity (PostgreSQL, MongoDB, MySQL, SQLite) without saving.
+      operationId: adminTestDatabaseConnection
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+                  example: "postgresql://user:pass@host:5432/db"
+      responses:
+        '200':
+          description: Connection test successful.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  latencyMs:
+                    type: integer
+                  engine:
+                    type: string
+        '400':
+          description: Connection failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/settings/database/migrate-and-activate:
+    post:
+      tags:
+        - Admin Settings
+      summary: Zero-Data-Loss Database Migration & Promotion
+      description: Tests target database, executes automated table schema migration and row synchronization, and promotes target to active primary.
+      operationId: adminMigrateAndActivateDatabase
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - targetUrl
+              properties:
+                targetUrl:
+                  type: string
+                role:
+                  type: string
+                  enum: [PRIMARY, BACKUP]
+                  default: PRIMARY
+                shouldMigrateData:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Migration and activation completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '400':
+          description: Pre-flight test failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Migration error; previous database remains active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # =========================================================================
+  # Moderator Operations (Granular Capability Restricted)
+  # =========================================================================
+  /api/v1/moderator/users:
+    get:
+      tags:
+        - Moderator Operations
+      summary: List Users (Moderator Portal)
+      description: Read-only user directory for moderators. Administrator accounts are strictly excluded from output.
+      operationId: moderatorListUsers
+      security:
+        - bearerAuth: []
+      x-required-moderator-permission:
+        module: users
+        action: view
+      parameters:
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: department
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Users list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  users:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserDetail'
+        '403':
+          description: Permission denied (lacking users.view).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/moderator/users/{id}:
+    get:
+      tags:
+        - Moderator Operations
+      summary: Get User Profile (Moderator Portal)
+      description: Returns user profile and history. Throws 403 Forbidden if attempting to inspect an Administrator account.
+      operationId: moderatorGetUserDetail
+      security:
+        - bearerAuth: []
+      x-required-moderator-permission:
+        module: users
+        action: view
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User profile retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  user:
+                    $ref: '#/components/schemas/UserDetail'
+        '403':
+          description: Access denied or target account is an Administrator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/moderator/courses:
+    get:
+      tags:
+        - Moderator Operations
+      summary: List Courses for Quality Review
+      description: Returns courses with curriculum quality scores and total lesson counts for content governance.
+      operationId: moderatorListCourses
+      security:
+        - bearerAuth: []
+      x-required-moderator-permission:
+        module: courses
+        action: view
+      responses:
+        '200':
+          description: Course review list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  courses:
+                    type: array
+                    items:
+                      type: object
+        '403':
+          description: Permission denied (lacking courses.view).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/moderator/enrollments:
+    get:
+      tags:
+        - Moderator Operations
+      summary: View Enrollment Approvals Queue
+      description: Moderator access to view pending enrollment applications forwarded by creators.
+      operationId: moderatorGetEnrollments
+      security:
+        - bearerAuth: []
+      x-required-moderator-permission:
+        module: enrollments
+        action: view
+      responses:
+        '200':
+          description: Enrollment queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EnrollmentRequest'
+        '403':
+          description: Permission denied (lacking enrollments.view).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/moderator/enrollments/{id}/approve:
+    patch:
+      tags:
+        - Moderator Operations
+      summary: Authorize Enrollment Application (Moderator)
+      description: Moderator approves enrollment and provisions active course assignment for student.
+      operationId: moderatorApproveEnrollment
+      security:
+        - bearerAuth: []
+      x-required-moderator-permission:
+        module: enrollments
+        action: approve
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                adminNotes:
+                  type: string
+                dueDateDays:
+                  type: integer
+                  default: 14
+      responses:
+        '200':
+          description: Application approved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '403':
+          description: Permission denied (lacking enrollments.approve).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/moderator/enrollments/{id}/reject:
+    patch:
+      tags:
+        - Moderator Operations
+      summary: Decline Enrollment Application (Moderator)
+      description: Moderator rejects an enrollment application.
+      operationId: moderatorRejectEnrollment
+      security:
+        - bearerAuth: []
+      x-required-moderator-permission:
+        module: enrollments
+        action: approve
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rejectionReason:
+                  type: string
+      responses:
+        '200':
+          description: Application rejected.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+        '403':
+          description: Permission denied (lacking enrollments.approve).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/moderator/audit-logs:
+    get:
+      tags:
+        - Moderator Operations
+      summary: View Security Audit Logs (Moderator)
+      description: Moderator access to view system audit events if granted the `auditLogs.view` capability.
+      operationId: moderatorListAuditLogs
+      security:
+        - bearerAuth: []
+      x-required-moderator-permission:
+        module: auditLogs
+        action: view
+      responses:
+        '200':
+          description: Audit logs list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  logs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLog'
+        '403':
+          description: Permission denied (lacking auditLogs.view).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # =========================================================================
+  # Real-Time Chat & Communications
+  # =========================================================================
+  /api/v1/chat/messages:
+    get:
+      tags:
+        - Real-Time Chat & Inbox
+      summary: Fetch Chat Messages
+      description: Returns messages for `ANNOUNCEMENT`, `COMMUNITY` (Support Desk), or `DIRECT` 1-on-1 channels.
+      operationId: getChatMessages
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ANNOUNCEMENT, COMMUNITY, DIRECT]
+            default: ANNOUNCEMENT
+        - name: contactId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: audit
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ['true', 'false']
+            default: 'false'
+      responses:
+        '200':
+          description: Message history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+    post:
+      tags:
+        - Real-Time Chat & Inbox
+      summary: Send Chat Message / Announcement
+      description: |
+        Dispatches message and emits live WebSocket event.
+        `ANNOUNCEMENT` broadcasts are strictly restricted to Administrators.
+        Applies server-side XSS sanitation to message content.
+      operationId: postChatMessage
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum: [ANNOUNCEMENT, COMMUNITY, DIRECT]
+                  default: COMMUNITY
+                content:
+                  type: string
+                  example: "Hello team, please review the latest security protocol."
+                recipientId:
+                  type: string
+                fileUrl:
+                  type: string
+                fileName:
+                  type: string
+                fileType:
+                  type: string
+                fileSize:
+                  type: integer
+                replyTo:
+                  type: object
+      responses:
+        '201':
+          description: Message posted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    $ref: '#/components/schemas/ChatMessage'
+        '400':
+          description: Empty content or missing recipient in direct message.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Non-admin attempted to post announcement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/chat/upload:
+    post:
+      tags:
+        - Real-Time Chat & Inbox
+      summary: Upload Chat File Attachment
+      description: Multer-based file upload up to 50MB for chat attachments.
+      operationId: uploadChatFile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: File uploaded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  file:
+                    type: object
+                    properties:
+                      fileUrl:
+                        type: string
+                      fileName:
+                        type: string
+                      fileType:
+                        type: string
+                      fileSize:
+                        type: integer
+        '400':
+          description: No file uploaded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/chat/contacts:
+    get:
+      tags:
+        - Real-Time Chat & Inbox
+      summary: List Chat Contacts with Unread Badges
+      description: Returns potential chat contacts with individual unread message count badges.
+      operationId: getChatContacts
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Contacts retrieved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  contacts:
+                    type: array
+                    items:
+                      type: object
+
+  /api/v1/chat/community/threads:
+    get:
+      tags:
+        - Real-Time Chat & Inbox
+      summary: List Support Desk User Threads (Staff Only)
+      description: Returns aggregated community support threads for Administrators and Moderators.
+      operationId: getCommunityThreads
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Support threads.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  threads:
+                    type: array
+                    items:
+                      type: object
+        '403':
+          description: Forbidden (Staff access required).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/chat/unread-count:
+    get:
+      tags:
+        - Real-Time Chat & Inbox
+      summary: Get Aggregate Unread Message Counts
+      description: Returns badge counts for unread direct messages, announcements, and support desk tickets.
+      operationId: getChatUnreadCount
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Unread counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                  directCount:
+                    type: integer
+                  announcementCount:
+                    type: integer
+                  communityCount:
+                    type: integer
+
+  /api/v1/chat/read-announcements:
+    post:
+      tags:
+        - Real-Time Chat & Inbox
+      summary: Mark Global Announcements as Read
+      description: Updates the caller's last announcement read timestamp.
+      operationId: markAnnouncementsRead
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Announcements marked read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+
+  /api/v1/chat/notifications:
+    get:
+      tags:
+        - Real-Time Chat & Inbox
+      summary: Get Mailbox Dropdown Feed
+      description: Returns combined preview list of recent announcements, support tickets, and direct messages for the top navigation bar.
+      operationId: getChatNotificationsFeed
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Notification feed items.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  announcements:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+                  community:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+                  direct:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+
+  # =========================================================================
+  # System Notifications
+  # =========================================================================
+  /api/v1/notifications:
+    get:
+      tags:
+        - Notifications
+      summary: List Persistent Notifications
+      description: Returns in-app notifications targeted to the caller's user ID or RBAC role.
+      operationId: getNotifications
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
+      responses:
+        '200':
+          description: Notifications list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  unreadCount:
+                    type: integer
+                  notifications:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+
+  /api/v1/notifications/{id}/read:
+    patch:
+      tags:
+        - Notifications
+      summary: Mark Notification as Read
+      description: Marks a single notification as read if owned by the caller or authorized by role.
+      operationId: markNotificationAsRead
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Notification marked read.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  notification:
+                    $ref: '#/components/schemas/Notification'
+        '403':
+          description: Unauthorized to mark this notification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Notification not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/notifications/read-all:
+    patch:
+      tags:
+        - Notifications
+      summary: Mark All Notifications as Read
+      description: Marks all active notifications for the current user and role as read.
+      operationId: markAllNotificationsAsRead
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: All notifications marked read.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandardSuccessResponse'
+
+  # =========================================================================
+  # Course Transfers & SLA Extensions
+  # =========================================================================
+  /api/v1/transfers:
+    get:
+      tags:
+        - Transfers & SLA
+      summary: List Course Transfer & SLA Requests
+      description: Lists transfer and SLA extension requests with status counts.
+      operationId: listTransfers
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ALL, PENDING, APPROVED, REJECTED]
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ALL, COURSE_TRANSFER, SLA_EXTENSION, DEPARTMENT_TRANSFER]
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Transfers list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  counts:
+                    type: object
+                    properties:
+                      pending:
+                        type: integer
+                      approved:
+                        type: integer
+                      rejected:
+                        type: integer
+                      total:
+                        type: integer
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TransferRequest'
+    post:
+      tags:
+        - Transfers & SLA
+      summary: Submit Course Transfer or SLA Extension Request
+      description: Student submits request to change tracks, request SLA deadline extension, or relocate department.
+      operationId: createTransfer
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                type:
+                  type: string
+                  enum: [COURSE_TRANSFER, SLA_EXTENSION, DEPARTMENT_TRANSFER]
+                  default: COURSE_TRANSFER
+                courseId:
+                  type: string
+                targetCourseId:
+                  type: string
+                fromDepartment:
+                  type: string
+                toDepartment:
+                  type: string
+                reason:
+                  type: string
+                  example: "Requesting 14-day SLA deadline extension due to medical leave."
+                requestedDays:
+                  type: integer
+                  default: 14
+      responses:
+        '201':
+          description: Transfer request created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  transfer:
+                    $ref: '#/components/schemas/TransferRequest'
+        '400':
+          description: Reason is mandatory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/transfers/{id}/approve:
+    patch:
+      tags:
+        - Transfers & SLA
+      summary: Authorize / Approve Transfer Request
+      description: |
+        Authorized by ADMIN or MODERATOR roles. If the request is an SLA extension,
+        automatically increments the student's assignment `dueDate` by `requestedDays`.
+      operationId: approveTransfer
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+        - MODERATOR
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notes:
+                  type: string
+                  example: "Authorized SLA extension for 14 days."
+      responses:
+        '200':
+          description: Request approved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  transfer:
+                    $ref: '#/components/schemas/TransferRequest'
+        '400':
+          description: Request is not in PENDING status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Transfer request not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/transfers/{id}/reject:
+    patch:
+      tags:
+        - Transfers & SLA
+      summary: Decline Transfer or SLA Extension Request
+      description: Authorized by ADMIN or MODERATOR roles. Rejects request and records review notes.
+      operationId: rejectTransfer
+      security:
+        - bearerAuth: []
+      x-required-roles:
+        - ADMIN
+        - MODERATOR
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  example: "Extension cannot exceed maximum cohort timeline."
+      responses:
+        '200':
+          description: Request rejected.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  transfer:
+                    $ref: '#/components/schemas/TransferRequest'
+        '403':
+          description: Forbidden role.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Transfer request not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+# =========================================================================
+# Reusable Components & Schemas
+# =========================================================================
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JSON Web Token passed in the `Authorization` header as `Bearer <token>`.
+        Payload contains `sub` (User UUID), `email`, `role`, `status`, and `department`.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: esmms_refresh_token
+      description: |
+        HttpOnly cookie containing the cryptographic refresh token used exclusively by `/api/v1/auth/refresh` and `/api/v1/auth/logout`.
+
+  schemas:
+    StandardSuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Operation completed successfully."
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "Invalid request payload."
+        details:
+          type: array
+          items:
+            type: string
+
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [ADMIN, MODERATOR, COURSE_CREATOR, USER]
+        status:
+          type: string
+          enum: [ACTIVE, LOCKED, SUSPENDED, PENDING_APPROVAL]
+        department:
+          type: string
+          nullable: true
+        avatar:
+          type: string
+          nullable: true
+        requestedRole:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    UserDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [ADMIN, MODERATOR, COURSE_CREATOR, USER]
+        status:
+          type: string
+          enum: [ACTIVE, LOCKED, SUSPENDED, PENDING_APPROVAL]
+        department:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        location:
+          type: string
+          nullable: true
+        avatar:
+          type: string
+          nullable: true
+        mustChangePassword:
+          type: boolean
+        failedLoginAttempts:
+          type: integer
+        lockUntil:
+          type: string
+          format: date-time
+          nullable: true
+        lastActive:
+          type: string
+          format: date-time
+        requestedRole:
+          type: string
+          nullable: true
+        moderatorPermissions:
+          $ref: '#/components/schemas/ModeratorPermissions'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ModeratorPermissions:
+      type: object
+      properties:
+        users:
+          type: object
+          properties:
+            view:
+              type: boolean
+            manage:
+              type: boolean
+        courses:
+          type: object
+          properties:
+            view:
+              type: boolean
+            manage:
+              type: boolean
+        enrollments:
+          type: object
+          properties:
+            view:
+              type: boolean
+            manage:
+              type: boolean
+            approve:
+              type: boolean
+        assessments:
+          type: object
+          properties:
+            view:
+              type: boolean
+            manage:
+              type: boolean
+        transfers:
+          type: object
+          properties:
+            view:
+              type: boolean
+            manage:
+              type: boolean
+            approve:
+              type: boolean
+        messages:
+          type: object
+          properties:
+            view:
+              type: boolean
+            manage:
+              type: boolean
+        auditLogs:
+          type: object
+          properties:
+            view:
+              type: boolean
+
+    ModuleSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          example: "SEC-101"
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        department:
+          type: string
+        level:
+          type: string
+        duration:
+          type: string
+          nullable: true
+        instructorName:
+          type: string
+          nullable: true
+        type:
+          type: string
+        status:
+          type: string
+        rating:
+          type: number
+        ratingCount:
+          type: integer
+        outcomes:
+          type: array
+          items:
+            type: string
+        prerequisites:
+          type: array
+          items:
+            type: string
+        expiresMonths:
+          type: integer
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        sectionCount:
+          type: integer
+        enrolledCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+    ModuleDetail:
+      allOf:
+        - $ref: '#/components/schemas/ModuleSummary'
+        - type: object
+          properties:
+            sections:
+              type: array
+              items:
+                $ref: '#/components/schemas/Section'
+
+    Section:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        moduleId:
+          type: string
+        title:
+          type: string
+        order:
+          type: integer
+        lessons:
+          type: array
+          items:
+            $ref: '#/components/schemas/Lesson'
+
+    Lesson:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        sectionId:
+          type: string
+        title:
+          type: string
+        type:
+          type: string
+          enum: [VIDEO, YOUTUBE, TEXT, MARKDOWN, DOCUMENT, QUIZ]
+        videoUrl:
+          type: string
+          nullable: true
+        content:
+          type: string
+          nullable: true
+        documentName:
+          type: string
+          nullable: true
+        duration:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        order:
+          type: integer
+
+    Question:
+      type: object
+      properties:
+        id:
+          type: string
+        order:
+          type: integer
+        text:
+          type: string
+        type:
+          type: string
+          enum: [MCQ, TRUE_FALSE, MULTI_SELECT]
+        options:
+          type: array
+          items:
+            type: string
+        correctAnswer:
+          oneOf:
+            - type: integer
+            - type: string
+            - type: array
+              items:
+                type: string
+        explanation:
+          type: string
+        points:
+          type: integer
+
+    SanitizedQuestion:
+      type: object
+      properties:
+        id:
+          type: string
+        order:
+          type: integer
+        text:
+          type: string
+        type:
+          type: string
+          enum: [MCQ, TRUE_FALSE, MULTI_SELECT]
+        options:
+          type: array
+          items:
+            type: string
+        points:
+          type: integer
+
+    Certificate:
+      type: object
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+          example: "ESMMS-CERT-2026-F9B2C1"
+        studentName:
+          type: string
+        courseCode:
+          type: string
+        courseTitle:
+          type: string
+        scoreAchieved:
+          type: integer
+          example: 95
+        status:
+          type: string
+          example: "VERIFIED"
+        verificationHash:
+          type: string
+          description: SHA-256 cryptographic verification checksum
+        issuedAt:
+          type: string
+          format: date-time
+        department:
+          type: string
+
+    EnrollmentRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        studentId:
+          type: string
+        moduleId:
+          type: string
+        creatorId:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [PENDING_CREATOR, FORWARDED_TO_ADMIN, APPROVED, REJECTED]
+        studentReason:
+          type: string
+          nullable: true
+        creatorRecommendation:
+          type: string
+          nullable: true
+        adminNotes:
+          type: string
+          nullable: true
+        assignedDueDate:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        student:
+          type: object
+        module:
+          type: object
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        actorId:
+          type: string
+          nullable: true
+        actorEmail:
+          type: string
+          nullable: true
+        actorName:
+          type: string
+          nullable: true
+        action:
+          type: string
+        resource:
+          type: string
+          nullable: true
+        details:
+          type: string
+          nullable: true
+        ipAddress:
+          type: string
+          nullable: true
+        riskLevel:
+          type: string
+          enum: [LOW, MEDIUM, HIGH]
+        createdAt:
+          type: string
+          format: date-time
+
+    ChatMessage:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [ANNOUNCEMENT, COMMUNITY, DIRECT]
+        senderId:
+          type: string
+        senderName:
+          type: string
+        senderEmail:
+          type: string
+          nullable: true
+        senderRole:
+          type: string
+        recipientId:
+          type: string
+          nullable: true
+        recipientName:
+          type: string
+          nullable: true
+        recipientRole:
+          type: string
+          nullable: true
+        content:
+          type: string
+        fileUrl:
+          type: string
+          nullable: true
+        fileName:
+          type: string
+          nullable: true
+        fileType:
+          type: string
+          nullable: true
+        fileSize:
+          type: integer
+          nullable: true
+        read:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        recipientId:
+          type: string
+          nullable: true
+        targetRole:
+          type: string
+          nullable: true
+        title:
+          type: string
+        message:
+          type: string
+        type:
+          type: string
+        link:
+          type: string
+          nullable: true
+        isRead:
+          type: boolean
+        metadata:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    TransferRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        requestId:
+          type: string
+          example: "TR-1082"
+        studentId:
+          type: string
+        studentName:
+          type: string
+        studentEmail:
+          type: string
+        department:
+          type: string
+          nullable: true
+        type:
+          type: string
+          enum: [COURSE_TRANSFER, SLA_EXTENSION, DEPARTMENT_TRANSFER]
+        typeLabel:
+          type: string
+        currentCourse:
+          type: string
+        targetCourse:
+          type: string
+          nullable: true
+        reason:
+          type: string
+        requestedDays:
+          type: integer
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED]
+        reviewedById:
+          type: string
+          nullable: true
+        reviewedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time

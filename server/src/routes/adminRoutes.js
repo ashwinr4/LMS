@@ -20,8 +20,10 @@ import {
   getAdminBadgeCounts,
 } from '../controllers/adminController.js';
 import { authenticateToken, requireRoles } from '../middleware/auth.js';
+import { validateId } from '../middleware/validate.js';
 
 const router = express.Router();
+router.param('id', (req, res, next) => validateId('id')(req, res, next));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // All Admin routes require ADMIN role

@@ -11,10 +11,13 @@ import {
   getMyRequests,
 } from '../controllers/enrollmentController.js';
 import { authenticateToken, requireRoles } from '../middleware/auth.js';
+import { validateId } from '../middleware/validate.js';
 
 const protect = authenticateToken;
 
 const router = express.Router();
+router.param('id', (req, res, next) => validateId('id')(req, res, next));
+router.param('moduleId', (req, res, next) => validateId('moduleId')(req, res, next));
 
 // Student Routes
 router.post('/request', protect, requestEnrollment);

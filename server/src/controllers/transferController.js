@@ -115,8 +115,8 @@ export async function listTransfers(req, res) {
     logger.error('Error in listTransfers:', error);
     return res.status(500).json({
       success: false,
+      error: 'FETCH_FAILED',
       message: 'Failed to fetch transfer requests.',
-      error: error.message,
     });
   }
 }
@@ -211,8 +211,8 @@ export async function createTransfer(req, res) {
     logger.error('Error in createTransfer:', error);
     return res.status(500).json({
       success: false,
+      error: 'CREATE_FAILED',
       message: 'Failed to submit transfer request.',
-      error: error.message,
     });
   }
 }
@@ -326,8 +326,8 @@ export async function approveTransfer(req, res) {
     logger.error('Error in approveTransfer:', error);
     return res.status(500).json({
       success: false,
+      error: 'APPROVE_FAILED',
       message: 'Failed to approve request.',
-      error: error.message,
     });
   }
 }
@@ -411,8 +411,8 @@ export async function rejectTransfer(req, res) {
     logger.error('Error in rejectTransfer:', error);
     return res.status(500).json({
       success: false,
+      error: 'REJECT_FAILED',
       message: 'Failed to reject request.',
-      error: error.message,
     });
   }
 }

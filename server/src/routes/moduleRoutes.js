@@ -20,6 +20,7 @@ import {
   uploadLessonMedia,
 } from '../controllers/moduleController.js';
 import { authenticateToken, requireRoles } from '../middleware/auth.js';
+import { validateId } from '../middleware/validate.js';
 
 const protect = authenticateToken;
 
@@ -46,6 +47,11 @@ const upload = multer({
 });
 
 const router = express.Router();
+
+// Auto-validate identifier parameters in nanoseconds
+router.param('id', (req, res, next) => validateId('id')(req, res, next));
+router.param('sectionId', (req, res, next) => validateId('sectionId')(req, res, next));
+router.param('lessonId', (req, res, next) => validateId('lessonId')(req, res, next));
 
 // Real lecture media file upload (videos, documents, PDFs)
 router.post('/upload-media', protect, requireRoles('COURSE_CREATOR', 'ADMIN'), upload.single('file'), uploadLessonMedia);

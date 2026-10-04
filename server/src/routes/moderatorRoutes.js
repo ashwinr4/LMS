@@ -11,8 +11,10 @@ import {
   rejectEnrollment,
 } from '../controllers/enrollmentController.js';
 import { authenticateToken, requireModeratorPermission } from '../middleware/auth.js';
+import { validateId } from '../middleware/validate.js';
 
 const router = express.Router();
+router.param('id', (req, res, next) => validateId('id')(req, res, next));
 
 router.use(authenticateToken);
 

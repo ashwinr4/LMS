@@ -98,7 +98,7 @@ export async function listUsers(req, res) {
     });
   } catch (error) {
     logger.error(`Admin List Users Error: ${error.message}`);
-    return res.status(500).json({ success: false, error: 'FETCH_FAILED', message: error.message });
+    return res.status(500).json({ success: false, error: 'FETCH_FAILED', message: 'Failed to retrieve users list.' });
   }
 }
 

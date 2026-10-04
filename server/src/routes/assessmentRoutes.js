@@ -13,8 +13,10 @@ import {
   extractQuestionsFromDocument,
 } from '../controllers/assessmentController.js';
 import { authenticateToken, requireRoles } from '../middleware/auth.js';
+import { validateId } from '../middleware/validate.js';
 
 const router = express.Router();
+router.param('id', (req, res, next) => validateId('id')(req, res, next));
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB

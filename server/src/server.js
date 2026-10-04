@@ -99,6 +99,7 @@ app.use(
 
 // Cloud Health Check & Keep-Alive Endpoint
 app.get('/health', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.status(200).json({ status: 'OK', uptime: Math.floor(process.uptime()), timestamp: new Date().toISOString() });
 });
 
@@ -129,13 +130,21 @@ const globalLimiter = rateLimit({
 });
 app.use('/api', globalLimiter);
 
-// 4. Request Logging Middleware
+// 4. API Dynamic Cache-Control (Prevents intermediate caching of sensitive dynamic responses)
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+// 5. Request Logging Middleware
 app.use((req, res, next) => {
   logger.info(`${req.method} ${req.originalUrl} - IP: ${req.ip}`);
   next();
 });
 
-// 5. Health Check Endpoint
+// 6. Health Check Endpoint
 app.get('/api/v1/health', (req, res) => {
   res.status(200).json({
     status: 'online',
@@ -158,7 +167,7 @@ import chatRoutes from './routes/chatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import transferRoutes from './routes/transferRoutes.js';
 
-// 6. Mount Modular API Routes
+// 7. Mount Modular API Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/certificates', certificateRoutes);
 app.use('/api/v1/modules', moduleRoutes);
@@ -170,7 +179,7 @@ app.use('/api/v1/chat', chatRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/transfers', transferRoutes);
 
-// 7. Root API Welcome Route
+// 8. Root API Welcome Route
 app.get('/api/v1', (req, res) => {
   res.status(200).json({
     message: 'Welcome to ESMMS API Gateway v1',
@@ -186,22 +195,58 @@ app.get('/api/v1', (req, res) => {
   });
 });
 
-// 7. Global 404 Handler for API Routes
-app.use('/api/*', (req, res) => {
+// 9. Universal JSON 404 Handler for Unhandled Routes (Ensures consistent Content-Type)
+app.use((req, res) => {
   res.status(404).json({
     success: false,
     error: 'ENDPOINT_NOT_FOUND',
-    message: `API endpoint ${req.originalUrl} does not exist on this server.`,
+    message: `API endpoint or resource ${req.originalUrl} does not exist on this server.`,
   });
 });
 
-// 8. Global Centralized Error Handler
+// 10. Global Centralized Error Handler
 app.use((err, req, res, next) => {
   logger.error(`Unhandled Exception: ${err.message}`, { stack: err.stack });
+
+  // Handle Body-Parser Malformed JSON syntax errors (from invalid request bodies)
+  if ((err instanceof SyntaxError || err.type === 'entity.parse.failed') && (err.status === 400 || err.statusCode === 400)) {
+    return res.status(400).json({
+      success: false,
+      error: 'MALFORMED_JSON_PAYLOAD',
+      message: 'The request body contains invalid or malformed JSON payload.',
+    });
+  }
+
+  // Map Prisma/database validation errors to 400 Bad Request
+  if (err.name === 'PrismaClientValidationError') {
+    return res.status(400).json({
+      success: false,
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid request data or parameter format.',
+    });
+  }
+
+  // Map Prisma known request errors
+  if (err.code === 'P2025') {
+    return res.status(404).json({
+      success: false,
+      error: 'NOT_FOUND',
+      message: 'The requested resource was not found.',
+    });
+  }
+
+  if (err.code === 'P2002') {
+    return res.status(409).json({
+      success: false,
+      error: 'DUPLICATE_ENTRY',
+      message: 'A resource with this identifier already exists.',
+    });
+  }
+
   res.status(500).json({
     success: false,
-    error: 'INTERNAL_SERVER_ERROR',
-    message: process.env.NODE_ENV === 'production' ? 'An internal server error occurred.' : err.message,
+    error: 'SERVER_EXCEPTION',
+    message: 'The server was unable to complete the request. Please try again later.',
   });
 });
 

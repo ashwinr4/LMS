@@ -161,7 +161,7 @@ export async function getMessages(req, res) {
     });
   } catch (error) {
     logger.error(`Get Chat Messages Error: ${error.message}`);
-    return res.status(500).json({ success: false, error: 'FETCH_FAILED', message: error.message });
+    return res.status(500).json({ success: false, error: 'FETCH_FAILED', message: 'Failed to retrieve chat messages.' });
   }
 }
 
@@ -186,7 +186,7 @@ export async function uploadChatFile(req, res) {
     });
   } catch (error) {
     logger.error(`Chat File Upload Error: ${error.message}`);
-    return res.status(500).json({ success: false, error: 'UPLOAD_FAILED', message: error.message });
+    return res.status(500).json({ success: false, error: 'UPLOAD_FAILED', message: 'Failed to upload chat file.' });
   }
 }
 
@@ -284,7 +284,7 @@ export async function postMessage(req, res) {
     });
   } catch (error) {
     logger.error(`Post Chat Message Error: ${error.message}`);
-    return res.status(500).json({ success: false, error: 'SEND_FAILED', message: error.message });
+    return res.status(500).json({ success: false, error: 'SEND_FAILED', message: 'Failed to send chat message.' });
   }
 }
 
@@ -366,7 +366,7 @@ export async function getCommunityThreads(req, res) {
     });
   } catch (error) {
     logger.error(`Get Community Threads Error: ${error.message}`);
-    return res.status(500).json({ success: false, error: 'THREADS_FAILED', message: error.message });
+    return res.status(500).json({ success: false, error: 'THREADS_FAILED', message: 'Failed to retrieve community threads.' });
   }
 }
 
@@ -417,7 +417,7 @@ export async function getContacts(req, res) {
     });
   } catch (error) {
     logger.error(`Get Chat Contacts Error: ${error.message}`);
-    return res.status(500).json({ success: false, error: 'CONTACTS_FAILED', message: error.message });
+    return res.status(500).json({ success: false, error: 'CONTACTS_FAILED', message: 'Failed to retrieve contacts list.' });
   }
 }
 
@@ -508,7 +508,8 @@ export async function markAnnouncementsRead(req, res) {
     await setLastAnnouncementRead(userId);
     return res.status(200).json({ success: true, message: 'Announcements marked as read' });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    logger.error(`Mark Announcements Read Error: ${error.message}`);
+    return res.status(500).json({ success: false, error: 'UPDATE_FAILED', message: 'Failed to mark announcements as read.' });
   }
 }
 
