@@ -1,6 +1,7 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { io } from '../server.js';
+import { cache } from '../utils/cache.js';
 
 // ============================================================
 // STAGE 1: SUBMIT ENROLLMENT APPLICATION (Student)
@@ -111,6 +112,7 @@ export async function requestEnrollment(req, res) {
     }
 
     logger.info(`Enrollment Request [${request.id}] created by Student [${studentId}] for Module [${moduleId}]`);
+    cache.invalidatePrefix('admin:');
 
     return res.status(201).json({
       success: true,
@@ -183,7 +185,10 @@ export async function forwardToAdmin(req, res) {
     if (io) {
       // Notify Admins
       io.to('role_ADMIN').emit('admin_new_request', {
+        requestType: 'ENROLLMENT_FORWARDED',
+        type: 'ENROLLMENT_FORWARDED',
         request: updated,
+        requestId: updated.id,
         message: `Instructor endorsed ${updated.student.name} for ${updated.module.title}`,
       });
       io.to('role_ADMIN').emit('system_notification', {
@@ -213,6 +218,7 @@ export async function forwardToAdmin(req, res) {
     }
 
     logger.info(`Enrollment Request [${id}] forwarded to Admin by Creator [${req.user.id}]`);
+    cache.invalidatePrefix('admin:');
 
     return res.status(200).json({
       success: true,
@@ -329,6 +335,7 @@ export async function approveEnrollment(req, res) {
     }
 
     logger.info(`Enrollment Request [${id}] APPROVED by Admin [${req.user.id}]. Assignment [${assignment.id}] provisioned.`);
+    cache.invalidatePrefix('admin:');
 
     return res.status(200).json({
       success: true,
@@ -392,9 +399,11 @@ export async function rejectEnrollment(req, res) {
     if (io) {
       io.to(`user_${request.studentId}`).emit('enrollment_rejected', {
         requestId: request.id,
+        courseId: request.moduleId,
         moduleId: request.moduleId,
         moduleTitle: request.module.title,
         reason: rejectionReason,
+        message: rejectionReason,
       });
 
       // Synchronize Queue Badges
@@ -404,6 +413,8 @@ export async function rejectEnrollment(req, res) {
         io.to('role_COURSE_CREATOR').emit('creator_request_resolved', { requestId: request.id });
       }
     }
+
+    cache.invalidatePrefix('admin:');
 
     return res.status(200).json({
       success: true,

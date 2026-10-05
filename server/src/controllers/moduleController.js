@@ -1,6 +1,7 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { cache } from '../utils/cache.js';
+import { io } from '../server.js';
 
 // ============================================================
 // LIST MODULES (public, all)
@@ -177,6 +178,11 @@ export async function createModule(req, res) {
     logger.info(`Module created: ${module.code} by ${req.user.email}`);
     cache.invalidatePrefix('modules:');
     cache.invalidatePrefix('admin:');
+
+    if (io) {
+      io.to('role_ADMIN').to('role_MODERATOR').to('role_COURSE_CREATOR').emit('course_created', { module });
+    }
+
     return res.status(201).json({ success: true, module });
   } catch (error) {
     logger.error(`Create Module Error: ${error.message}`);
@@ -203,6 +209,12 @@ export async function updateModule(req, res) {
 
     cache.invalidatePrefix('modules:');
     cache.invalidatePrefix('admin:');
+
+    if (io) {
+      io.to('role_ADMIN').to('role_MODERATOR').to('role_COURSE_CREATOR').to(`course_${id}`).emit('course_updated', { moduleId: id, module });
+      io.to(`course_${id}`).emit('curriculum_updated', { moduleId: id });
+    }
+
     return res.status(200).json({ success: true, module });
   } catch (error) {
     logger.error(`Update Module Error: ${error.message}`);
@@ -219,6 +231,11 @@ export async function deleteModule(req, res) {
     await prisma.module.delete({ where: { id } });
     cache.invalidatePrefix('modules:');
     cache.invalidatePrefix('admin:');
+
+    if (io) {
+      io.to('role_ADMIN').to('role_MODERATOR').to('role_COURSE_CREATOR').to(`course_${id}`).emit('course_deleted', { moduleId: id });
+    }
+
     return res.status(200).json({ success: true, message: 'Module deleted successfully.' });
   } catch (error) {
     logger.error(`Delete Module Error: ${error.message}`);
@@ -242,6 +259,11 @@ export async function createSection(req, res) {
     });
 
     cache.invalidatePrefix('modules:');
+
+    if (io) {
+      io.to(`course_${moduleId}`).emit('curriculum_updated', { moduleId });
+    }
+
     return res.status(201).json({ success: true, section });
   } catch (error) {
     logger.error(`Create Section Error: ${error.message}`);
@@ -257,6 +279,11 @@ export async function updateSection(req, res) {
       data: req.body,
     });
     cache.invalidatePrefix('modules:');
+
+    if (io && section?.moduleId) {
+      io.to(`course_${section.moduleId}`).emit('curriculum_updated', { moduleId: section.moduleId });
+    }
+
     return res.status(200).json({ success: true, section });
   } catch (error) {
     logger.error(`Update Section Error: ${error.message}`);
@@ -267,8 +294,14 @@ export async function updateSection(req, res) {
 export async function deleteSection(req, res) {
   try {
     const { sectionId } = req.params;
+    const existingSection = await prisma.section.findUnique({ where: { id: sectionId } });
     await prisma.section.delete({ where: { id: sectionId } });
     cache.invalidatePrefix('modules:');
+
+    if (io && existingSection?.moduleId) {
+      io.to(`course_${existingSection.moduleId}`).emit('curriculum_updated', { moduleId: existingSection.moduleId });
+    }
+
     return res.status(200).json({ success: true, message: 'Section deleted.' });
   } catch (error) {
     logger.error(`Delete Section Error: ${error.message}`);
@@ -291,7 +324,13 @@ export async function createLesson(req, res) {
       data: { sectionId, title, type, videoUrl, content, documentName, duration, notes, order: count },
     });
 
+    const section = await prisma.section.findUnique({ where: { id: sectionId }, select: { moduleId: true } });
     cache.invalidatePrefix('modules:');
+
+    if (io && section?.moduleId) {
+      io.to(`course_${section.moduleId}`).emit('curriculum_updated', { moduleId: section.moduleId });
+    }
+
     return res.status(201).json({ success: true, lesson });
   } catch (error) {
     logger.error(`Create Lesson Error: ${error.message}`);
@@ -306,7 +345,13 @@ export async function updateLesson(req, res) {
       where: { id: lessonId },
       data: req.body,
     });
+    const section = await prisma.section.findUnique({ where: { id: lesson.sectionId }, select: { moduleId: true } });
     cache.invalidatePrefix('modules:');
+
+    if (io && section?.moduleId) {
+      io.to(`course_${section.moduleId}`).emit('curriculum_updated', { moduleId: section.moduleId });
+    }
+
     return res.status(200).json({ success: true, lesson });
   } catch (error) {
     logger.error(`Update Lesson Error: ${error.message}`);
@@ -317,8 +362,17 @@ export async function updateLesson(req, res) {
 export async function deleteLesson(req, res) {
   try {
     const { lessonId } = req.params;
+    const existingLesson = await prisma.lesson.findUnique({
+      where: { id: lessonId },
+      include: { section: { select: { moduleId: true } } },
+    });
     await prisma.lesson.delete({ where: { id: lessonId } });
     cache.invalidatePrefix('modules:');
+
+    if (io && existingLesson?.section?.moduleId) {
+      io.to(`course_${existingLesson.section.moduleId}`).emit('curriculum_updated', { moduleId: existingLesson.section.moduleId });
+    }
+
     return res.status(200).json({ success: true, message: 'Lesson deleted.' });
   } catch (error) {
     logger.error(`Delete Lesson Error: ${error.message}`);

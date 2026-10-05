@@ -164,8 +164,12 @@ export async function register(req, res) {
             link: '/admin/approvals?tab=moderators',
           });
           io.to('role_ADMIN').emit('admin_new_request', {
+            requestType: 'MODERATOR_REGISTRATION',
+            type: 'MODERATOR_REGISTRATION',
             title: 'Moderator Request',
             user: newUser,
+            userId: newUser.id,
+            message: `${newUser.name} requested Moderator access.`,
           });
         }
       } catch (notifErr) {
@@ -507,6 +511,21 @@ export async function refresh(req, res) {
       });
     }
 
+    // Ensure user record is loaded even if adapter include is shallow
+    let user = session.user;
+    if (!user && session.userId) {
+      user = await prisma.user.findUnique({ where: { id: session.userId } });
+    }
+
+    if (!user) {
+      clearRefreshTokenCookie(res);
+      return res.status(401).json({
+        success: false,
+        error: 'USER_NOT_FOUND',
+        message: 'The account associated with this session no longer exists.',
+      });
+    }
+
     // Invalidate previous session token (One-Time Use Token Rotation)
     await prisma.activeSession.update({
       where: { id: session.id },
@@ -514,8 +533,8 @@ export async function refresh(req, res) {
     });
 
     // Generate new token pair
-    const newAccessToken = generateAccessToken(session.user);
-    const newRefreshToken = generateRefreshToken(session.user);
+    const newAccessToken = generateAccessToken(user);
+    const newRefreshToken = generateRefreshToken(user);
     const newRefreshTokenHash = hashToken(newRefreshToken);
 
     const newExpiresAt = new Date();
@@ -523,7 +542,7 @@ export async function refresh(req, res) {
 
     await prisma.activeSession.create({
       data: {
-        userId: session.user.id,
+        userId: user.id,
         refreshTokenHash: newRefreshTokenHash,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'] || 'Rotated Session',
@@ -533,17 +552,33 @@ export async function refresh(req, res) {
 
     setRefreshTokenCookie(res, newRefreshToken);
 
+    let parsedPerms = null;
+    if (user.moderatorPermissions) {
+      try {
+        parsedPerms = typeof user.moderatorPermissions === 'string'
+          ? JSON.parse(user.moderatorPermissions)
+          : user.moderatorPermissions;
+      } catch {
+        parsedPerms = null;
+      }
+    }
+
     return res.status(200).json({
       success: true,
       accessToken: newAccessToken,
       user: {
-        id: session.user.id,
-        name: session.user.name,
-        email: session.user.email,
-        role: session.user.role,
-        status: session.user.status,
-        department: session.user.department,
-        avatar: session.user.avatar,
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        department: user.department,
+        phone: user.phone,
+        location: user.location,
+        avatar: user.avatar,
+        mustChangePassword: Boolean(user.mustChangePassword),
+        requestedRole: user.requestedRole,
+        moderatorPermissions: parsedPerms,
       },
     });
   } catch (error) {
@@ -1070,6 +1105,17 @@ export async function googleLogin(req, res) {
 
     logger.info(`User signed in via Google SSO: ${user.email} (${user.role})`);
 
+    let parsedGooglePerms = null;
+    if (user.moderatorPermissions) {
+      try {
+        parsedGooglePerms = typeof user.moderatorPermissions === 'string'
+          ? JSON.parse(user.moderatorPermissions)
+          : user.moderatorPermissions;
+      } catch {
+        parsedGooglePerms = null;
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Authenticated successfully via Google SSO.',
@@ -1080,7 +1126,12 @@ export async function googleLogin(req, res) {
         role: user.role,
         status: user.status,
         department: user.department,
+        phone: user.phone,
+        location: user.location,
         avatar: user.avatar,
+        mustChangePassword: Boolean(user.mustChangePassword),
+        requestedRole: user.requestedRole,
+        moderatorPermissions: parsedGooglePerms,
       },
       accessToken,
     });

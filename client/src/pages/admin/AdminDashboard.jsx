@@ -141,10 +141,25 @@ export default function AdminDashboard() {
       fetchDashboardSummary();
     };
     socket.on('admin_new_request', handleRefresh);
+    socket.on('admin_request_resolved', handleRefresh);
+    socket.on('transfer:created', handleRefresh);
+    socket.on('transfer:updated', handleRefresh);
+    socket.on('course_created', handleRefresh);
+    socket.on('course_updated', handleRefresh);
+    socket.on('course_deleted', handleRefresh);
     socket.on('chat_announcement', handleRefresh);
+    window.addEventListener('app_sync', handleRefresh);
+
     return () => {
       socket.off('admin_new_request', handleRefresh);
+      socket.off('admin_request_resolved', handleRefresh);
+      socket.off('transfer:created', handleRefresh);
+      socket.off('transfer:updated', handleRefresh);
+      socket.off('course_created', handleRefresh);
+      socket.off('course_updated', handleRefresh);
+      socket.off('course_deleted', handleRefresh);
       socket.off('chat_announcement', handleRefresh);
+      window.removeEventListener('app_sync', handleRefresh);
     };
   }, [socket, fetchDashboardSummary]);
 

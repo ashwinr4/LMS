@@ -18,9 +18,19 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   const saveAuth = useCallback((userData, token) => {
-    setUser(userData);
+    setUser((prev) => {
+      const mergedUser = {
+        ...prev,
+        ...userData,
+        moderatorPermissions:
+          userData?.moderatorPermissions !== undefined
+            ? userData.moderatorPermissions
+            : prev?.moderatorPermissions || null,
+      };
+      secureStorage.setItem(STORAGE_KEYS.USER, mergedUser);
+      return mergedUser;
+    });
     setAccessToken(token);
-    secureStorage.setItem(STORAGE_KEYS.USER, userData);
     secureStorage.setItem(STORAGE_KEYS.TOKEN, token);
     api.defaults.headers.common.Authorization = `Bearer ${token}`;
   }, []);
@@ -164,8 +174,7 @@ export function AuthProvider({ children }) {
     setUser((prev) => {
       const merged = { ...prev, ...updatedUserData };
       try {
-        localStorage.setItem('esmms_user', JSON.stringify(merged));
-        sessionStorage.setItem('esmms_user', JSON.stringify(merged));
+        secureStorage.setItem(STORAGE_KEYS.USER, merged);
       } catch {}
       return merged;
     });

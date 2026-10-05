@@ -1,5 +1,6 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
+import { io } from '../server.js';
 
 /**
  * GET /api/v1/notifications
@@ -78,6 +79,10 @@ export async function markAsRead(req, res) {
       data: { isRead: true },
     });
 
+    if (io) {
+      io.to(`user_${userId}`).emit('notifications_read', { id, isRead: true });
+    }
+
     return res.status(200).json({
       success: true,
       notification: updated,
@@ -109,6 +114,10 @@ export async function markAllAsRead(req, res) {
       },
       data: { isRead: true },
     });
+
+    if (io) {
+      io.to(`user_${userId}`).emit('notifications_read', { all: true });
+    }
 
     return res.status(200).json({
       success: true,

@@ -107,40 +107,53 @@ export default function AdminApprovals() {
     fetchTransfers();
   }, [fetchQueue, fetchModeratorRequests, fetchTransfers]);
 
-  // Real-time socket listener
+  // Real-time socket listener & app_sync listener
   useEffect(() => {
     if (!socket) return;
     const handleNew = (data) => {
-      if (data?.request) {
+      if (data?.requestType === 'MODERATOR_REGISTRATION' || data?.type === 'MODERATOR_REGISTRATION' || data?.user) {
+        if (data?.user) {
+          setModeratorRequests((prev) => [data.user, ...prev.filter((u) => u.id !== data.user.id)]);
+        }
+        fetchModeratorRequests();
+      } else if (data?.request) {
         setRequests((prev) => [data.request, ...prev.filter((r) => r.id !== data.request.id)]);
+        fetchQueue();
       } else {
         fetchQueue();
+        fetchModeratorRequests();
       }
     };
 
     const handleResolved = (data) => {
-      if (data?.requestId) {
-        setRequests((prev) => prev.filter((r) => r.id !== data.requestId));
-      }
-      if (data?.userId) {
-        setModeratorRequests((prev) => prev.filter((u) => u.id !== data.userId));
+      const targetId = data?.requestId || data?.userId;
+      if (targetId) {
+        setRequests((prev) => prev.filter((r) => r.id !== targetId));
+        setModeratorRequests((prev) => prev.filter((u) => u.id !== targetId));
       }
       fetchQueue();
       fetchModeratorRequests();
     };
 
     const handleTransferUpdated = () => fetchTransfers();
+    const handleAppSync = () => {
+      fetchQueue();
+      fetchModeratorRequests();
+      fetchTransfers();
+    };
 
     socket.on('admin_new_request', handleNew);
     socket.on('admin_request_resolved', handleResolved);
     socket.on('transfer:created', handleTransferUpdated);
     socket.on('transfer:updated', handleTransferUpdated);
+    window.addEventListener('app_sync', handleAppSync);
 
     return () => {
       socket.off('admin_new_request', handleNew);
       socket.off('admin_request_resolved', handleResolved);
       socket.off('transfer:created', handleTransferUpdated);
       socket.off('transfer:updated', handleTransferUpdated);
+      window.removeEventListener('app_sync', handleAppSync);
     };
   }, [socket, fetchQueue, fetchModeratorRequests, fetchTransfers]);
 

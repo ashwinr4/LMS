@@ -68,6 +68,23 @@ io.on('connection', (socket) => {
     logger.info(`Socket ${socket.id} joined user room: ${room}`);
   });
 
+  // Join course room for real-time curriculum and player updates
+  socket.on('join_course_room', (courseId) => {
+    if (courseId) {
+      const room = `course_${courseId}`;
+      socket.join(room);
+      logger.info(`Socket ${socket.id} joined course room: ${room}`);
+    }
+  });
+
+  socket.on('leave_course_room', (courseId) => {
+    if (courseId) {
+      const room = `course_${courseId}`;
+      socket.leave(room);
+      logger.info(`Socket ${socket.id} left course room: ${room}`);
+    }
+  });
+
   socket.on('disconnect', () => {
     logger.info(`WebSocket Client Disconnected: ${socket.id}`);
   });

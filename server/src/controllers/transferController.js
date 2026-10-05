@@ -1,6 +1,7 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { io } from '../server.js';
+import { cache } from '../utils/cache.js';
 
 /**
  * GET /api/v1/transfers
@@ -199,8 +200,9 @@ export async function createTransfer(req, res) {
     };
 
     if (io) {
-      io.emit('transfer:created', formattedTransfer);
+      io.to('role_ADMIN').to('role_MODERATOR').to(`user_${req.user.id}`).emit('transfer:created', formattedTransfer);
     }
+    cache.invalidatePrefix('admin:');
 
     return res.status(201).json({
       success: true,
@@ -314,8 +316,14 @@ export async function approveTransfer(req, res) {
     }
 
     if (io) {
-      io.emit('transfer:updated', updated);
+      io.to('role_ADMIN').to('role_MODERATOR').to(`user_${existing.userId}`).emit('transfer:updated', updated);
+      io.to(`user_${existing.userId}`).emit('transfer_resolved', {
+        transferId: existing.id,
+        status: 'APPROVED',
+        message: 'Your transfer/extension request has been approved.',
+      });
     }
+    cache.invalidatePrefix('admin:');
 
     return res.status(200).json({
       success: true,
@@ -399,8 +407,15 @@ export async function rejectTransfer(req, res) {
     }
 
     if (io) {
-      io.emit('transfer:updated', updated);
+      io.to('role_ADMIN').to('role_MODERATOR').to(`user_${existing.userId}`).emit('transfer:updated', updated);
+      io.to(`user_${existing.userId}`).emit('transfer_resolved', {
+        transferId: existing.id,
+        status: 'REJECTED',
+        reason,
+        message: `Your transfer/extension request was rejected: ${reason}`,
+      });
     }
+    cache.invalidatePrefix('admin:');
 
     return res.status(200).json({
       success: true,

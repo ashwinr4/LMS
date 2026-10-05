@@ -32,6 +32,8 @@ export function SocketProvider({ children }) {
         s.emit('join_user_room', user.id);
         s.emit('join_role_room', user.role);
       }
+      window.dispatchEvent(new Event('app_sync'));
+      window.dispatchEvent(new Event('socket_reconnected'));
     });
 
     s.on('disconnect', () => {
@@ -51,11 +53,19 @@ export function SocketProvider({ children }) {
 
     s.on('admin_new_request', (data) => {
       if (user?.role === 'ADMIN') {
-        addToast({
-          type: 'info',
-          title: 'Enrollment Endorsed by Instructor',
-          message: data.message || 'An application requires administrative authorization.',
-        });
+        if (data?.requestType === 'MODERATOR_REGISTRATION' || data?.type === 'MODERATOR_REGISTRATION' || data?.user) {
+          addToast({
+            type: 'info',
+            title: '🛡️ Moderator Role Request',
+            message: data.message || `${data.user?.name || 'A user'} requested Moderator privileges.`,
+          });
+        } else {
+          addToast({
+            type: 'info',
+            title: 'Enrollment Endorsed by Instructor',
+            message: data.message || 'An application requires administrative authorization.',
+          });
+        }
       }
     });
 

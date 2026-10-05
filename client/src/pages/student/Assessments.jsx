@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api.js';
+import { useSocket } from '../../context/SocketContext.jsx';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
@@ -21,17 +22,14 @@ import {
 
 export default function Assessments() {
   const navigate = useNavigate();
+  const { socket } = useSocket();
   const [exams, setExams] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedExam, setSelectedExam] = useState(null);
   const [showConsentModal, setShowConsentModal] = useState(false);
 
-  useEffect(() => {
-    fetchExams();
-  }, []);
-
-  const fetchExams = async () => {
+  const fetchExams = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -45,7 +43,28 @@ export default function Assessments() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchExams();
+  }, [fetchExams]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleSync = () => fetchExams();
+
+    socket.on('assessment_published', handleSync);
+    socket.on('assessment_updated', handleSync);
+    socket.on('assessment_graded', handleSync);
+    window.addEventListener('app_sync', handleSync);
+
+    return () => {
+      socket.off('assessment_published', handleSync);
+      socket.off('assessment_updated', handleSync);
+      socket.off('assessment_graded', handleSync);
+      window.removeEventListener('app_sync', handleSync);
+    };
+  }, [socket, fetchExams]);
 
   const handleStartExam = (exam) => {
     setSelectedExam(exam);

@@ -196,6 +196,11 @@ export async function createAssessment(req, res) {
     });
 
     logger.info(`Assessment created: ${assessment.id} for module ${moduleId}`);
+
+    if (io) {
+      io.to(`course_${moduleId}`).to('role_ADMIN').emit('assessment_published', { assessmentId: assessment.id, moduleId });
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Assessment created successfully.',
@@ -247,6 +252,10 @@ export async function updateAssessment(req, res) {
         questions: JSON.stringify(normalizedQuestions),
       },
     });
+
+    if (io) {
+      io.to(`course_${existing.moduleId}`).to('role_ADMIN').emit('assessment_updated', { assessmentId: updated.id, moduleId: existing.moduleId });
+    }
 
     return res.status(200).json({
       success: true,
@@ -750,6 +759,32 @@ export async function submitExam(req, res) {
     }
 
     logger.info(`Exam submitted: assessment=${id} user=${userId} score=${score}% passed=${passed} violations=${violationCount} disqualified=${isDisqualified}`);
+
+    if (io) {
+      io.to(`user_${userId}`).emit('assessment_graded', {
+        assessmentId: id,
+        moduleId: assessment.moduleId,
+        score,
+        passed,
+        isDisqualified,
+      });
+      io.to('role_ADMIN').emit('assessment_submitted', {
+        assessmentId: id,
+        studentId: userId,
+        studentName: req.user.name,
+        passed,
+        score,
+      });
+      if (assessment.module?.instructorId) {
+        io.to(`user_${assessment.module.instructorId}`).emit('assessment_submitted', {
+          assessmentId: id,
+          studentId: userId,
+          studentName: req.user.name,
+          passed,
+          score,
+        });
+      }
+    }
 
     return res.status(200).json({
       success: true,

@@ -423,7 +423,9 @@ export async function updateUserStatus(req, res) {
     });
 
     if (io) {
-      io.to('role_ADMIN').emit('admin_request_resolved', { userId: id, status });
+      io.to('role_ADMIN').emit('admin_request_resolved', { userId: id, requestId: id, status });
+      io.to('role_ADMIN').emit('user_status_updated', { userId: id, status });
+      io.to(`user_${id}`).emit('user_status_changed', { status });
     }
 
     logger.info(`Admin ${req.user.email} changed user ${user.email} status to ${status}`);
@@ -1142,7 +1144,9 @@ export async function getDashboardSummary(req, res) {
       totalUsers,
       activeModules,
       underReviewModules,
-      pendingApprovals,
+      pendingEnrollmentApprovals,
+      pendingModerators,
+      pendingTransfers,
       todayActivityCount,
       recentPendingApprovals,
       recentActivityLogs,
@@ -1153,9 +1157,22 @@ export async function getDashboardSummary(req, res) {
       prisma.module.count({ where: { status: 'ACTIVE' } }),
       // Draft / Under Review modules
       prisma.module.count({ where: { status: 'DRAFT' } }),
-      // 3. Pending Approvals
+      // 3. Pending Enrollment Approvals
       prisma.courseEnrollmentRequest.count({
         where: { status: { in: ['FORWARDED_TO_ADMIN', 'PENDING_CREATOR'] } },
+      }),
+      // Pending Moderator Registrations
+      prisma.user.count({
+        where: {
+          OR: [
+            { status: 'PENDING_APPROVAL' },
+            { requestedRole: 'MODERATOR', status: 'PENDING_APPROVAL' },
+          ],
+        },
+      }),
+      // Pending SLA / Course Transfers
+      prisma.transferRequest.count({
+        where: { status: 'PENDING' },
       }),
       // 4. Platform Activity Today
       prisma.auditLog.count({
@@ -1178,6 +1195,8 @@ export async function getDashboardSummary(req, res) {
       }),
     ]);
 
+    const pendingApprovals = pendingEnrollmentApprovals + pendingModerators + pendingTransfers;
+
     const payload = {
       success: true,
       stats: {
@@ -1185,6 +1204,9 @@ export async function getDashboardSummary(req, res) {
         activeModules,
         underReviewModules,
         pendingApprovals,
+        pendingEnrollmentApprovals,
+        pendingModerators,
+        pendingTransfers,
         todayActivityCount,
       },
       recentApprovals: recentPendingApprovals,
@@ -1210,12 +1232,20 @@ export async function getAdminBadgeCounts(req, res) {
       return res.status(200).json(cached);
     }
 
-    const [pendingEnrollmentApprovals, pendingModerators, passwordResetRequests] = await Promise.all([
+    const [pendingEnrollmentApprovals, pendingModerators, pendingTransfers, passwordResetRequests] = await Promise.all([
       prisma.courseEnrollmentRequest.count({
         where: { status: 'FORWARDED_TO_ADMIN' },
       }),
       prisma.user.count({
-        where: { status: 'PENDING_APPROVAL', requestedRole: 'MODERATOR' },
+        where: {
+          OR: [
+            { status: 'PENDING_APPROVAL' },
+            { requestedRole: 'MODERATOR', status: 'PENDING_APPROVAL' },
+          ],
+        },
+      }),
+      prisma.transferRequest.count({
+        where: { status: 'PENDING' },
       }),
       prisma.user.count({
         where: { passwordResetRequested: true },
@@ -1225,9 +1255,10 @@ export async function getAdminBadgeCounts(req, res) {
     const payload = {
       success: true,
       counts: {
-        pendingApprovals: pendingEnrollmentApprovals + pendingModerators,
+        pendingApprovals: pendingEnrollmentApprovals + pendingModerators + pendingTransfers,
         pendingEnrollmentApprovals,
         pendingModerators,
+        pendingTransfers,
         passwordResetRequests,
       },
     };
@@ -1383,12 +1414,19 @@ export async function updateModeratorPermissions(req, res) {
         io.to(`user_${user.id}`).emit('user_role_updated', {
           role: 'MODERATOR',
           status: 'ACTIVE',
+          permissions: newPerms,
         });
-        io.to('role_ADMIN').emit('admin_request_resolved', { userId: user.id });
+        io.to('role_ADMIN').emit('admin_request_resolved', {
+          userId: user.id,
+          requestId: user.id,
+          type: 'MODERATOR',
+        });
       }
     } catch (notifErr) {
       logger.warn(`Could not dispatch permission notification: ${notifErr.message}`);
     }
+
+    cache.invalidatePrefix('admin:');
 
     return res.status(200).json({
       success: true,

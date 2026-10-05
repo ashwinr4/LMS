@@ -337,18 +337,31 @@ export default function Inbox() {
       }
     };
 
+    const handleReconnect = () => {
+      fetchMessages();
+      fetchChannelCounts();
+      fetchContacts();
+      if (isStaff) {
+        fetchCommunityThreads();
+      }
+    };
+
     socket.on('new_announcement', handleAnnouncement);
     socket.on('new_community_message', handleCommunity);
     socket.on('new_direct_message', handleDirect);
     socket.on('admin_message_audit', handleAudit);
+    window.addEventListener('socket_reconnected', handleReconnect);
+    window.addEventListener('app_sync', handleReconnect);
 
     return () => {
       socket.off('new_announcement', handleAnnouncement);
       socket.off('new_community_message', handleCommunity);
       socket.off('new_direct_message', handleDirect);
       socket.off('admin_message_audit', handleAudit);
+      window.removeEventListener('socket_reconnected', handleReconnect);
+      window.removeEventListener('app_sync', handleReconnect);
     };
-  }, [socket, activeTab, selectedContact, selectedCommunityUser, isAdmin, isStaff, user?.id, fetchContacts, fetchCommunityThreads]);
+  }, [socket, activeTab, selectedContact, selectedCommunityUser, isAdmin, isStaff, user?.id, fetchContacts, fetchCommunityThreads, fetchMessages, fetchChannelCounts]);
 
   useEffect(() => {
     scrollToBottom();

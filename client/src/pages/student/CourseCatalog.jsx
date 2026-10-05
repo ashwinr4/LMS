@@ -101,10 +101,20 @@ export default function CourseCatalog() {
 
     socket.on('enrollment_approved', handleApproved);
     socket.on('enrollment_status_updated', handleStatusUpdated);
+    socket.on('enrollment_rejected', handleStatusUpdated);
+    socket.on('course_created', handleStatusUpdated);
+    socket.on('course_updated', handleStatusUpdated);
+    socket.on('course_deleted', handleStatusUpdated);
+    window.addEventListener('app_sync', handleStatusUpdated);
 
     return () => {
       socket.off('enrollment_approved', handleApproved);
       socket.off('enrollment_status_updated', handleStatusUpdated);
+      socket.off('enrollment_rejected', handleStatusUpdated);
+      socket.off('course_created', handleStatusUpdated);
+      socket.off('course_updated', handleStatusUpdated);
+      socket.off('course_deleted', handleStatusUpdated);
+      window.removeEventListener('app_sync', handleStatusUpdated);
     };
   }, [socket, fetchCoursesAndStatus]);
 

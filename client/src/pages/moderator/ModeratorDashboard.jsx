@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useSocket } from '../../context/SocketContext.jsx';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
@@ -21,6 +22,7 @@ import {
 export default function ModeratorDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { socket } = useSocket();
   const [courses, setCourses] = useState([]);
   const [usersCount, setUsersCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -42,11 +44,7 @@ export default function ModeratorDashboard() {
   const canViewTransfers = user?.role === 'ADMIN' || Boolean(perms.transfers?.view);
   const canViewEnrollments = user?.role === 'ADMIN' || Boolean(perms.enrollments?.view);
 
-  useEffect(() => {
-    fetchModeratorOverview();
-  }, [user]);
-
-  const fetchModeratorOverview = async () => {
+  const fetchModeratorOverview = useCallback(async () => {
     setLoading(true);
     try {
       const promises = [];
@@ -72,7 +70,32 @@ export default function ModeratorDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [canViewCourses, canViewUsers]);
+
+  useEffect(() => {
+    fetchModeratorOverview();
+  }, [fetchModeratorOverview]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleSync = () => fetchModeratorOverview();
+
+    socket.on('course_created', handleSync);
+    socket.on('course_updated', handleSync);
+    socket.on('course_deleted', handleSync);
+    socket.on('transfer:created', handleSync);
+    socket.on('transfer:updated', handleSync);
+    window.addEventListener('app_sync', handleSync);
+
+    return () => {
+      socket.off('course_created', handleSync);
+      socket.off('course_updated', handleSync);
+      socket.off('course_deleted', handleSync);
+      socket.off('transfer:created', handleSync);
+      socket.off('transfer:updated', handleSync);
+      window.removeEventListener('app_sync', handleSync);
+    };
+  }, [socket, fetchModeratorOverview]);
 
   const hasAnyScope = canViewCourses || canViewUsers || canViewTransfers || canViewEnrollments;
 

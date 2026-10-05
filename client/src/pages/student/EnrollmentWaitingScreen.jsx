@@ -75,24 +75,43 @@ export default function EnrollmentWaitingScreen() {
     if (!socket) return;
 
     const handleApproved = (data) => {
-      if (data.moduleId === moduleId) {
+      if (data?.moduleId === moduleId || data?.courseId === moduleId) {
         setRequest((prev) => ({ ...prev, status: 'APPROVED' }));
         triggerCelebration();
       }
     };
 
     const handleUpdated = (data) => {
-      if (data.requestId === request?.id || !request) {
+      if (data?.requestId === request?.id || data?.moduleId === moduleId || data?.courseId === moduleId || !request) {
         fetchStatus();
       }
     };
 
+    const handleRejected = (data) => {
+      if (data?.requestId === request?.id || data?.moduleId === moduleId || data?.courseId === moduleId || !request) {
+        setRequest((prev) => ({
+          ...prev,
+          status: 'REJECTED',
+          rejectionReason: data?.reason || data?.message || prev?.rejectionReason,
+        }));
+        fetchStatus();
+      }
+    };
+
+    const handleAppSync = () => {
+      fetchStatus();
+    };
+
     socket.on('enrollment_approved', handleApproved);
     socket.on('enrollment_status_updated', handleUpdated);
+    socket.on('enrollment_rejected', handleRejected);
+    window.addEventListener('app_sync', handleAppSync);
 
     return () => {
       socket.off('enrollment_approved', handleApproved);
       socket.off('enrollment_status_updated', handleUpdated);
+      socket.off('enrollment_rejected', handleRejected);
+      window.removeEventListener('app_sync', handleAppSync);
     };
   }, [socket, moduleId, request?.id, triggerCelebration, fetchStatus]);
 

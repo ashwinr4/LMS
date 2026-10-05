@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api } from '../../services/api.js';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { useSocket } from '../../context/SocketContext.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { cn } from '../../utils/cn.js';
@@ -81,6 +82,7 @@ function LessonIcon({ type, className }) {
 export default function LearningPlayer() {
   const { moduleId } = useParams();
   const { user } = useAuth();
+  const { socket } = useSocket();
   const navigate = useNavigate();
 
   const [module, setModule] = useState(null);
@@ -171,6 +173,34 @@ export default function LearningPlayer() {
     }
     if (moduleId) load();
   }, [moduleId]);
+
+  // Join course room for real-time curriculum and player synchronization
+  useEffect(() => {
+    if (!socket || !moduleId) return;
+
+    socket.emit('join_course_room', moduleId);
+
+    const handleCurriculumUpdated = (data) => {
+      if (data?.moduleId === moduleId || !data?.moduleId) {
+        api.get(`/modules/${moduleId}`).then((res) => {
+          if (res.data?.module) {
+            setModule(res.data.module);
+          }
+        }).catch(() => {});
+      }
+    };
+
+    socket.on('curriculum_updated', handleCurriculumUpdated);
+    socket.on('course_updated', handleCurriculumUpdated);
+    window.addEventListener('app_sync', handleCurriculumUpdated);
+
+    return () => {
+      socket.emit('leave_course_room', moduleId);
+      socket.off('curriculum_updated', handleCurriculumUpdated);
+      socket.off('course_updated', handleCurriculumUpdated);
+      window.removeEventListener('app_sync', handleCurriculumUpdated);
+    };
+  }, [socket, moduleId]);
 
   // Anti-skip time update handler
   const handleTimeUpdate = () => {

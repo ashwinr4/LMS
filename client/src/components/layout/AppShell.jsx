@@ -39,7 +39,7 @@ import {
 import { MustChangePasswordModal } from '../auth/MustChangePasswordModal.jsx';
 
 export function AppShell() {
-  const { user, logout } = useAuth();
+  const { user, logout, updateUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const { socket } = useSocket();
   const navigate = useNavigate();
@@ -201,9 +201,35 @@ export function AppShell() {
       }
     };
 
-    // 6. User role updated live
-    const handleRoleUpdated = () => {
-      window.location.reload();
+    // 6. User role & permissions updated live
+    const handleRoleUpdated = (payload) => {
+      if (payload?.permissions !== undefined || payload?.role) {
+        updateUser({
+          ...(payload.role ? { role: payload.role } : {}),
+          ...(payload.permissions !== undefined ? { moderatorPermissions: payload.permissions } : {}),
+        });
+      }
+      fetchBadgeCounts();
+      window.dispatchEvent(new Event('app_sync'));
+    };
+
+    // User status changed (e.g. locked or suspended by administrator)
+    const handleStatusChanged = (payload) => {
+      if (payload?.status === 'SUSPENDED' || payload?.status === 'LOCKED') {
+        logout();
+      } else if (payload?.status) {
+        updateUser({ status: payload.status });
+      }
+    };
+
+    // Multi-tab notification read synchronization
+    const handleNotificationsRead = (payload) => {
+      if (payload?.all) {
+        setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+      } else if (payload?.id) {
+        setNotifications((prev) => prev.map((n) => (n.id === payload.id ? { ...n, isRead: true } : n)));
+      }
+      fetchBadgeCounts();
     };
 
     // 7. Mail & Chat message notifications (strictly for Mail icon)
@@ -252,6 +278,8 @@ export function AppShell() {
     socket.on('password_reset_requested', handlePasswordResetReq);
     socket.on('password_reset_completed', handlePasswordResetDone);
     socket.on('user_role_updated', handleRoleUpdated);
+    socket.on('user_status_changed', handleStatusChanged);
+    socket.on('notifications_read', handleNotificationsRead);
     socket.on('new_announcement', handleNewAnnouncement);
     socket.on('new_direct_message', handleNewDirect);
     socket.on('new_community_message', handleNewCommunity);
@@ -271,6 +299,8 @@ export function AppShell() {
       socket.off('password_reset_requested', handlePasswordResetReq);
       socket.off('password_reset_completed', handlePasswordResetDone);
       socket.off('user_role_updated', handleRoleUpdated);
+      socket.off('user_status_changed', handleStatusChanged);
+      socket.off('notifications_read', handleNotificationsRead);
       socket.off('new_announcement', handleNewAnnouncement);
       socket.off('new_direct_message', handleNewDirect);
       socket.off('new_community_message', handleNewCommunity);
@@ -280,7 +310,7 @@ export function AppShell() {
       socket.off('transfer:created', handleEnrollmentUpdate);
       socket.off('transfer:updated', handleEnrollmentUpdate);
     };
-  }, [socket, userRole, user?.id, location.pathname, fetchBadgeCounts, fetchUnreadMessagesCount, fetchRecentMessages]);
+  }, [socket, userRole, user?.id, location.pathname, fetchBadgeCounts, fetchUnreadMessagesCount, fetchRecentMessages, updateUser, logout]);
 
   // Moderator permissions parser for dynamic permission-aware navigation
   const moderatorPerms = (() => {
