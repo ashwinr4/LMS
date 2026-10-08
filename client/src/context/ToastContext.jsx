@@ -13,7 +13,7 @@ export function ToastProvider({ children }) {
   }, []);
 
   const addToast = useCallback(
-    ({ title, message, type = 'info', duration = 4000 }) => {
+    ({ title, message, type = 'info', duration = 3000 }) => {
       const id = Date.now().toString() + Math.random().toString(36).substring(2, 5);
       const newToast = { id, title, message, type };
 
@@ -28,7 +28,8 @@ export function ToastProvider({ children }) {
     [removeToast]
   );
 
-  const toast = {
+  const toastMethods = {
+    addToast,
     success: (title, message) => addToast({ title, message, type: 'success' }),
     error: (title, message) => addToast({ title, message, type: 'error' }),
     warning: (title, message) => addToast({ title, message, type: 'warning' }),
@@ -43,7 +44,7 @@ export function ToastProvider({ children }) {
   };
 
   return (
-    <ToastContext.Provider value={toast}>
+    <ToastContext.Provider value={toastMethods}>
       {children}
       {typeof document !== 'undefined' &&
         createPortal(

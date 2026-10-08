@@ -1,0 +1,57 @@
+﻿env:
+  contexts:
+    - name: QualivaUpload
+      urls:
+        - http://host.docker.internal:5050
+      includePaths:
+        - 'http://host\.docker\.internal:5050/api/v1/modules/upload-media.*'
+        - 'http://host\.docker\.internal:5050/uploads/lessons/.*'
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    continueOnFailure: false
+    progressToStdout: true
+jobs:
+  - type: requestor
+    requests:
+      - name: HTML multipart upload
+        url: http://host.docker.internal:5050/api/v1/modules/upload-media
+        method: POST
+        headers:
+          - 'Authorization: Bearer ${QUALIVA_UPLOAD_TOKEN}'
+          - 'Content-Type: multipart/form-data; boundary=----QualivaZAPBoundary'
+        data: "------QualivaZAPBoundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"qualiva-zap-upload-test.html\"\r\nContent-Type: text/html\r\n\r\n<!doctype html><html><head><title>Qualiva ZAP Upload Test</title></head><body>QUALIVA_ZAP_UPLOAD_TEST</body></html>\r\n------QualivaZAPBoundary--\r\n"
+        responseCode: 200
+      - name: SVG multipart upload
+        url: http://host.docker.internal:5050/api/v1/modules/upload-media
+        method: POST
+        headers:
+          - 'Authorization: Bearer ${QUALIVA_UPLOAD_TOKEN}'
+          - 'Content-Type: multipart/form-data; boundary=----QualivaZAPBoundary2'
+        data: "------QualivaZAPBoundary2\r\nContent-Disposition: form-data; name=\"file\"; filename=\"qualiva-zap-upload-test.svg\"\r\nContent-Type: image/svg+xml\r\n\r\n<svg xmlns=\"http://www.w3.org/2000/svg\"><script>document.body.dataset.qualiva='test'</script></svg>\r\n------QualivaZAPBoundary2--\r\n"
+        responseCode: 200
+      - name: JavaScript multipart upload
+        url: http://host.docker.internal:5050/api/v1/modules/upload-media
+        method: POST
+        headers:
+          - 'Authorization: Bearer ${QUALIVA_UPLOAD_TOKEN}'
+          - 'Content-Type: multipart/form-data; boundary=----QualivaZAPBoundary3'
+        data: "------QualivaZAPBoundary3\r\nContent-Disposition: form-data; name=\"file\"; filename=\"qualiva-zap-upload-test.js\"\r\nContent-Type: application/javascript\r\n\r\nconsole.log('QUALIVA_ZAP_UPLOAD_TEST');\r\n------QualivaZAPBoundary3--\r\n"
+        responseCode: 200
+  - type: activeScan
+    parameters:
+      context: QualivaUpload
+      url: http://host.docker.internal:5050/api/v1/modules/upload-media
+      defaultStrength: Medium
+      defaultThreshold: Low
+      maxScanDurationInMins: 10
+      threadPerHost: 1
+      delayInMs: 100
+  - type: passiveScan-wait
+  - type: report
+    parameters:
+      template: traditional-html-plus
+      reportDir: /zap/wrk/security-reports
+      reportFile: file-upload-security.html
+      reportTitle: Qualiva File Upload Security Test
+      reportDescription: Authenticated ZAP active test of the Qualiva lesson media upload endpoint.

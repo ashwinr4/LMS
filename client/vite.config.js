@@ -40,6 +40,17 @@ export default defineConfig({
       '/socket.io': {
         target: 'http://localhost:5050',
         ws: true,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {
+            // Silently handle proxy connection drops during server reloads/scans
+          });
+          proxy.on('proxyReqWs', (proxyReq, req, socket) => {
+            socket.on('error', () => {
+              // Prevent unhandled ECONNRESET on socket stream from terminating Vite dev process
+            });
+          });
+        },
       },
     },
   },

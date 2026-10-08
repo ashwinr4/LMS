@@ -1,0 +1,47 @@
+env:
+  contexts:
+    - name: QualivaUpload
+      urls:
+        - http://host.docker.internal:5050
+  vars:
+    uploadToken: ${env:QUALIVA_UPLOAD_TOKEN}
+
+jobs:
+  - type: replacer
+    parameters:
+      deleteAllRules: true
+    rules:
+      - description: CreatorAdminAuth
+        url: "http://host\.docker\.internal:5050/.*"
+        method: POST
+        matchType: req_header
+        matchString: Authorization
+        matchRegex: false
+        replacementString: "Bearer ${uploadToken}"
+        tokenProcessing: false
+
+  - type: requestor
+    requests:
+      - name: Qualiva HTML Upload
+        url: http://host.docker.internal:5050/api/v1/modules/upload-media
+        method: POST
+        headers:
+          - "Content-Type: multipart/form-data"
+        data: ""
+
+  - type: activeScan
+    parameters:
+      context: QualivaUpload
+      url: http://host.docker.internal:5050/api/v1/modules/upload-media
+      defaultStrength: Medium
+      defaultThreshold: Low
+      threadPerHost: 1
+      maxScanDurationInMins: 10
+
+  - type: report
+    parameters:
+      template: traditional-html-plus
+      reportDir: /zap/wrk
+      reportFile: qualiva-file-upload-security-zap-report.html
+      reportTitle: Qualiva File Upload Security Test
+      reportDescription: ZAP active security test of the Qualiva lesson media upload endpoint.

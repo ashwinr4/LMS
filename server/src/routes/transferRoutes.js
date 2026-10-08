@@ -5,7 +5,7 @@ import {
   approveTransfer,
   rejectTransfer,
 } from '../controllers/transferController.js';
-import { authenticateToken, requireRoles } from '../middleware/auth.js';
+import { authenticateToken, requireRoles, requireModeratorPermission } from '../middleware/auth.js';
 import { validateId } from '../middleware/validate.js';
 
 const router = express.Router();
@@ -19,10 +19,10 @@ router.get('/', listTransfers);
 // 2. Submit a new transfer or SLA extension request
 router.post('/', createTransfer);
 
-// 3. Authorize / Approve a request (ADMIN or MODERATOR)
-router.patch('/:id/approve', requireRoles('ADMIN', 'MODERATOR'), approveTransfer);
+// 3. Authorize / Approve a request (ADMIN or MODERATOR with transfers.approve)
+router.patch('/:id/approve', requireModeratorPermission('transfers', 'approve'), approveTransfer);
 
-// 4. Reject a request (ADMIN or MODERATOR)
-router.patch('/:id/reject', requireRoles('ADMIN', 'MODERATOR'), rejectTransfer);
+// 4. Reject a request (ADMIN or MODERATOR with transfers.approve)
+router.patch('/:id/reject', requireModeratorPermission('transfers', 'approve'), rejectTransfer);
 
 export default router;

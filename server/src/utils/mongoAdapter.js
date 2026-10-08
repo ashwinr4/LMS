@@ -222,6 +222,51 @@ export class MongoAdapter {
         const docs = await cursor.toArray();
         const results = [];
 
+        // Fast parallel batch prefetching to prevent N+1 sequential round trips
+        if (args.include && modelKey === 'courseEnrollmentRequest') {
+          const studentIds = [...new Set(docs.map((d) => d.studentId).filter(Boolean))];
+          const moduleIds = [...new Set(docs.map((d) => d.moduleId).filter(Boolean))];
+
+          const [students, modules] = await Promise.all([
+            args.include.student && studentIds.length
+              ? self.user.findMany({ where: { id: { in: studentIds } }, select: args.include.student.select })
+              : Promise.resolve([]),
+            args.include.module && moduleIds.length
+              ? self.module.findMany({ where: { id: { in: moduleIds } }, select: args.include.module.select })
+              : Promise.resolve([]),
+          ]);
+
+          const studentMap = new Map(students.map((s) => [s.id, s]));
+          const moduleMap = new Map(modules.map((m) => [m.id, m]));
+
+          for (let doc of docs) {
+            let item = { ...doc };
+            if (item._id && !item.id) item.id = String(item._id);
+            if (args.include.student) item.student = studentMap.get(item.studentId) || null;
+            if (args.include.module) item.module = moduleMap.get(item.moduleId) || null;
+            if (args.select) item = applySelect(item, args.select);
+            results.push(item);
+          }
+          return results;
+        }
+
+        if (args.include && modelKey === 'assignment' && args.include.module) {
+          const moduleIds = [...new Set(docs.map((d) => d.moduleId).filter(Boolean))];
+          const modules = moduleIds.length
+            ? await self.module.findMany({ where: { id: { in: moduleIds } }, include: args.include.module.include })
+            : [];
+          const moduleMap = new Map(modules.map((m) => [m.id, m]));
+
+          for (let doc of docs) {
+            let item = { ...doc };
+            if (item._id && !item.id) item.id = String(item._id);
+            item.module = moduleMap.get(item.moduleId) || null;
+            if (args.select) item = applySelect(item, args.select);
+            results.push(item);
+          }
+          return results;
+        }
+
         for (let doc of docs) {
           let item = { ...doc };
           if (item._id && !item.id) item.id = String(item._id);
@@ -249,6 +294,9 @@ export class MongoAdapter {
 
         await coll.insertOne(data);
         let result = { ...data };
+        if (args.include) {
+          result = await self.handleInclude(modelKey, result, args.include);
+        }
         if (args.select) result = applySelect(result, args.select);
         return result;
       },
@@ -263,8 +311,45 @@ export class MongoAdapter {
         const updated = await coll.findOne(filter);
         let result = updated ? { ...updated } : { ...data, ...args.where };
         if (result._id && !result.id) result.id = String(result._id);
+        if (args.include) {
+          result = await self.handleInclude(modelKey, result, args.include);
+        }
         if (args.select) result = applySelect(result, args.select);
         return result;
+      },
+
+      async upsert(args = {}) {
+        await self.connect();
+        const coll = self.getCollection(modelKey);
+        const filter = translateWhere(args.where);
+        const existing = await coll.findOne(filter);
+
+        if (existing) {
+          const updateData = { ...args.update, updatedAt: new Date() };
+          await coll.updateOne(filter, { $set: updateData });
+          const updated = await coll.findOne(filter);
+          let result = updated ? { ...updated } : { ...existing, ...updateData };
+          if (result._id && !result.id) result.id = String(result._id);
+          if (args.include) {
+            result = await self.handleInclude(modelKey, result, args.include);
+          }
+          if (args.select) result = applySelect(result, args.select);
+          return result;
+        } else {
+          const createData = { ...args.create };
+          if (!createData.id) createData.id = crypto.randomUUID();
+          createData._id = createData.id;
+          if (!createData.createdAt) createData.createdAt = new Date();
+          if (!createData.updatedAt) createData.updatedAt = new Date();
+
+          await coll.insertOne(createData);
+          let result = { ...createData };
+          if (args.include) {
+            result = await self.handleInclude(modelKey, result, args.include);
+          }
+          if (args.select) result = applySelect(result, args.select);
+          return result;
+        }
       },
 
       async updateMany(args = {}) {

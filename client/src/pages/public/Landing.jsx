@@ -29,7 +29,7 @@ export default function Landing() {
     if (user.role === 'ADMIN') return ROUTES.ADMIN_DASHBOARD;
     if (user.role === 'COURSE_CREATOR') return ROUTES.CREATOR_DASHBOARD;
     if (user.role === 'MODERATOR') return ROUTES.MODERATOR_DASHBOARD;
-    return '/courses';
+    return ROUTES.MY_COURSES;
   };
 
   return (

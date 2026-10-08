@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { ROUTES } from '../../routes/routeMap.js';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -61,17 +61,28 @@ export default function Login() {
     }
   };
 
-  const redirectByRole = (role) => {
-    const from = location.state?.from?.pathname;
-    if (from) {
-      navigate(from, { replace: true });
+  const redirectByRole = useCallback((role) => {
+    const rawFrom = location.state?.from;
+    const fromPath = typeof rawFrom === 'string' ? rawFrom : rawFrom?.pathname;
+    
+    // Ignore public catalog/landing/auth pages so users enter their authenticated dashboard
+    const isPublicOrCatalog = !fromPath || ['/courses', '/catalog', '/', '/login', '/register'].includes(fromPath);
+    if (fromPath && !isPublicOrCatalog) {
+      navigate(fromPath, { replace: true });
       return;
     }
+
     if (role === 'ADMIN') navigate(ROUTES.ADMIN_DASHBOARD);
     else if (role === 'COURSE_CREATOR') navigate(ROUTES.CREATOR_DASHBOARD);
     else if (role === 'MODERATOR') navigate(ROUTES.MODERATOR_DASHBOARD);
-    else navigate('/courses');
-  };
+    else navigate(ROUTES.MY_COURSES);
+  }, [location.state, navigate]);
+
+  useEffect(() => {
+    if (isAuthenticated && user?.role) {
+      redirectByRole(user.role);
+    }
+  }, [isAuthenticated, user, redirectByRole]);
 
   // Step 1: Submit email & password -> Triggers OTP dispatch
   const handleSubmitCredentials = async (e) => {

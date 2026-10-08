@@ -72,11 +72,11 @@ export function Tabs({ tabs, activeTab, onChange, className }) {
               <span
                 className={cn(
                   'px-1.5 py-0.2 rounded-full text-[10.5px] font-mono font-bold leading-tight shadow-xs transition-colors',
-                  tab.badgeStyle === 'neutral'
-                    ? isActive
+                  tab.badgeStyle === 'alert'
+                    ? 'bg-red-500 text-white border border-red-600/30'
+                    : isActive
                       ? 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
                       : 'bg-elevated text-app-muted border border-app'
-                    : 'bg-red-500 text-white border border-red-600/30'
                 )}
               >
                 {tab.count}

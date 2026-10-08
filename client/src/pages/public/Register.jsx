@@ -144,7 +144,7 @@ export default function Register() {
     if (role === 'ADMIN') navigate(ROUTES.ADMIN_DASHBOARD);
     else if (role === 'COURSE_CREATOR') navigate(ROUTES.CREATOR_DASHBOARD);
     else if (role === 'MODERATOR') navigate(ROUTES.MODERATOR_DASHBOARD);
-    else navigate('/catalog');
+    else navigate(ROUTES.MY_COURSES);
   };
 
   const handleGoogleAuthSuccess = (data, credential) => {

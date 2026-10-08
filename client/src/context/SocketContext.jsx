@@ -93,6 +93,15 @@ export function SocketProvider({ children }) {
       });
     });
 
+    s.on('transfer_resolved', (data) => {
+      addToast({
+        type: data.status === 'APPROVED' ? 'success' : 'info',
+        title: data.status === 'APPROVED' ? 'Transfer Request Approved' : 'Transfer Request Declined',
+        message: data.message || (data.status === 'APPROVED' ? 'Your transfer/extension request has been approved.' : 'Your request was not approved.'),
+      });
+      window.dispatchEvent(new Event('app_sync'));
+    });
+
     // Real-Time Inbox Message Alerts (shown when not actively on the inbox page)
     s.on('new_direct_message', (data) => {
       if (data?.senderId !== user?.id && data?.recipientId === user?.id) {

@@ -123,17 +123,17 @@ export default function CourseCatalog() {
     if (!modalCourse) return;
     setSubmitting(true);
     try {
+      const cId = modalCourse.id;
       await api.post('/enrollments/request', {
-        moduleId: modalCourse.id,
+        moduleId: cId,
         studentReason: motivation,
       });
+      setModalCourse(null);
       addToast({
         type: 'success',
         title: 'Application Submitted',
         message: 'Your 3-stage enrollment request is now in the Instructor review queue.',
       });
-      const cId = modalCourse.id;
-      setModalCourse(null);
       navigate(`/waiting-approval/${cId}`);
     } catch (err) {
       addToast({

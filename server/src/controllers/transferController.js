@@ -28,6 +28,32 @@ export async function listTransfers(req, res) {
       ];
     }
 
+    // Role-based scoping: Normal USER accounts can only see their own transfer requests
+    if (req.user && req.user.role === 'USER') {
+      where.studentId = req.user.id;
+    }
+
+    // Moderator check: Enforce transfers.view permission for MODERATOR accounts
+    if (req.user && req.user.role === 'MODERATOR') {
+      let perms = {};
+      try {
+        perms = typeof req.user.moderatorPermissions === 'string'
+          ? JSON.parse(req.user.moderatorPermissions)
+          : req.user.moderatorPermissions || {};
+      } catch {
+        perms = {};
+      }
+      if (!perms.transfers?.view) {
+        return res.status(403).json({
+          success: false,
+          error: 'MODERATOR_PERMISSION_DENIED',
+          message: 'Access denied. Your Moderator account does not have authorization for: [transfers -> view].',
+        });
+      }
+    }
+
+    const baseCountWhere = req.user && req.user.role === 'USER' ? { studentId: req.user.id } : {};
+
     const [requests, pendingCount, approvedCount, rejectedCount, totalCount] = await Promise.all([
       prisma.transferRequest.findMany({
         where,
@@ -64,10 +90,10 @@ export async function listTransfers(req, res) {
         },
         orderBy: { createdAt: 'desc' },
       }),
-      prisma.transferRequest.count({ where: { status: 'PENDING' } }),
-      prisma.transferRequest.count({ where: { status: 'APPROVED' } }),
-      prisma.transferRequest.count({ where: { status: 'REJECTED' } }),
-      prisma.transferRequest.count(),
+      prisma.transferRequest.count({ where: { ...baseCountWhere, status: 'PENDING' } }),
+      prisma.transferRequest.count({ where: { ...baseCountWhere, status: 'APPROVED' } }),
+      prisma.transferRequest.count({ where: { ...baseCountWhere, status: 'REJECTED' } }),
+      prisma.transferRequest.count({ where: baseCountWhere }),
     ]);
 
     const normalizedRequests = requests.map((r) => {
@@ -302,26 +328,40 @@ export async function approveTransfer(req, res) {
     });
 
     // Create notification for requester
+    const recipientId = existing.studentId || existing.userId;
     try {
-      await prisma.notification.create({
-        data: {
-          userId: existing.userId,
-          title: 'Request Approved',
-          message: `Your ${existing.type.replace(/_/g, ' ').toLowerCase()} request has been approved.`,
-          type: 'SYSTEM',
-        },
-      });
-    } catch (_) {
-      // continue even if notification schema differs slightly
+      if (recipientId) {
+        await prisma.notification.create({
+          data: {
+            recipientId,
+            title: 'Request Approved',
+            message: `Your ${existing.type.replace(/_/g, ' ').toLowerCase()} request has been approved.`,
+            type: 'SYSTEM',
+            link: '/courses',
+          },
+        });
+      }
+    } catch (notifErr) {
+      logger.warn(`Failed to create transfer approval notification: ${notifErr.message}`);
     }
 
     if (io) {
-      io.to('role_ADMIN').to('role_MODERATOR').to(`user_${existing.userId}`).emit('transfer:updated', updated);
-      io.to(`user_${existing.userId}`).emit('transfer_resolved', {
-        transferId: existing.id,
-        status: 'APPROVED',
-        message: 'Your transfer/extension request has been approved.',
-      });
+      if (recipientId) {
+        io.to('role_ADMIN').to('role_MODERATOR').to(`user_${recipientId}`).emit('transfer:updated', updated);
+        io.to(`user_${recipientId}`).emit('transfer_resolved', {
+          transferId: existing.id,
+          status: 'APPROVED',
+          message: 'Your transfer/extension request has been approved.',
+        });
+        io.to(`user_${recipientId}`).emit('system_notification', {
+          title: 'Request Approved',
+          message: `Your ${existing.type.replace(/_/g, ' ').toLowerCase()} request has been approved.`,
+          type: 'SYSTEM',
+          link: '/courses',
+        });
+      } else {
+        io.to('role_ADMIN').to('role_MODERATOR').emit('transfer:updated', updated);
+      }
     }
     cache.invalidatePrefix('admin:');
 
@@ -393,27 +433,41 @@ export async function rejectTransfer(req, res) {
     });
 
     // Create notification for requester
+    const recipientId = existing.studentId || existing.userId;
     try {
-      await prisma.notification.create({
-        data: {
-          userId: existing.userId,
-          title: 'Request Rejected',
-          message: `Your ${existing.type.replace(/_/g, ' ').toLowerCase()} request was rejected: ${reason}`,
-          type: 'SYSTEM',
-        },
-      });
-    } catch (_) {
-      // continue
+      if (recipientId) {
+        await prisma.notification.create({
+          data: {
+            recipientId,
+            title: 'Request Rejected',
+            message: `Your ${existing.type.replace(/_/g, ' ').toLowerCase()} request was rejected: ${reason}`,
+            type: 'SYSTEM',
+            link: '/courses',
+          },
+        });
+      }
+    } catch (notifErr) {
+      logger.warn(`Failed to create transfer rejection notification: ${notifErr.message}`);
     }
 
     if (io) {
-      io.to('role_ADMIN').to('role_MODERATOR').to(`user_${existing.userId}`).emit('transfer:updated', updated);
-      io.to(`user_${existing.userId}`).emit('transfer_resolved', {
-        transferId: existing.id,
-        status: 'REJECTED',
-        reason,
-        message: `Your transfer/extension request was rejected: ${reason}`,
-      });
+      if (recipientId) {
+        io.to('role_ADMIN').to('role_MODERATOR').to(`user_${recipientId}`).emit('transfer:updated', updated);
+        io.to(`user_${recipientId}`).emit('transfer_resolved', {
+          transferId: existing.id,
+          status: 'REJECTED',
+          reason,
+          message: `Your transfer/extension request was rejected: ${reason}`,
+        });
+        io.to(`user_${recipientId}`).emit('system_notification', {
+          title: 'Request Rejected',
+          message: `Your ${existing.type.replace(/_/g, ' ').toLowerCase()} request was rejected: ${reason}`,
+          type: 'SYSTEM',
+          link: '/courses',
+        });
+      } else {
+        io.to('role_ADMIN').to('role_MODERATOR').emit('transfer:updated', updated);
+      }
     }
     cache.invalidatePrefix('admin:');
 

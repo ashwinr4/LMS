@@ -79,6 +79,16 @@ export async function listAssessments(req, res) {
     const where = {};
     if (moduleId) where.moduleId = moduleId;
 
+    // For COURSE_CREATOR, restrict assessment listing to courses created or instructed by them
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      where.module = {
+        OR: [
+          { createdBy: req.user.id },
+          { instructorId: req.user.id },
+        ],
+      };
+    }
+
     const assessments = await prisma.assessment.findMany({
       where,
       include: {
@@ -134,11 +144,25 @@ export async function getAssessment(req, res) {
     const assessment = await prisma.assessment.findUnique({
       where: { id },
       include: {
-        module: { select: { code: true, title: true, department: true } },
+        module: { select: { code: true, title: true, department: true, createdBy: true, instructorId: true } },
       },
     });
     if (!assessment) {
       return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Assessment not found.' });
+    }
+
+    // Creator ownership validation
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        assessment.module?.createdBy === req.user.id ||
+        assessment.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to access assessments for your own courses.',
+        });
+      }
     }
     return res.status(200).json({
       success: true,
@@ -168,6 +192,18 @@ export async function createAssessment(req, res) {
     const module = await prisma.module.findUnique({ where: { id: moduleId } });
     if (!module) {
       return res.status(404).json({ success: false, error: 'MODULE_NOT_FOUND', message: 'Module not found.' });
+    }
+
+    // Creator ownership validation
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner = module.createdBy === req.user.id || module.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to create assessments for your own courses.',
+        });
+      }
     }
 
     const normalizedQuestions = (questions || []).map((q, idx) => ({
@@ -221,9 +257,26 @@ export async function updateAssessment(req, res) {
     const { id } = req.params;
     const { title, description, passingScore, sampleSize, durationMinutes, randomizeQuestions, questions, status } = req.body;
 
-    const existing = await prisma.assessment.findUnique({ where: { id } });
+    const existing = await prisma.assessment.findUnique({
+      where: { id },
+      include: { module: { select: { createdBy: true, instructorId: true } } },
+    });
     if (!existing) {
       return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Assessment not found.' });
+    }
+
+    // Creator ownership validation
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        existing.module?.createdBy === req.user.id ||
+        existing.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to update assessments for your own courses.',
+        });
+      }
     }
 
     const normalizedQuestions = questions
@@ -275,6 +328,29 @@ export async function updateAssessment(req, res) {
 export async function deleteAssessment(req, res) {
   try {
     const { id } = req.params;
+
+    const existing = await prisma.assessment.findUnique({
+      where: { id },
+      include: { module: { select: { createdBy: true, instructorId: true } } },
+    });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Assessment not found.' });
+    }
+
+    // Creator ownership validation
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        existing.module?.createdBy === req.user.id ||
+        existing.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to delete assessments for your own courses.',
+        });
+      }
+    }
+
     await prisma.assessment.delete({ where: { id } });
     return res.status(200).json({ success: true, message: 'Assessment deleted.' });
   } catch (error) {

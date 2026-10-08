@@ -74,13 +74,14 @@ export default function CreatorRequests() {
       await api.patch(`/enrollments/${targetId}/forward`, {
         creatorRecommendation: recommendation,
       });
+      setEndorseModal({ open: false, req: null });
+      setRequests((prev) => prev.filter((r) => r.id !== targetId));
       addToast({
         type: 'success',
         title: 'Application Endorsed',
         message: 'Successfully forwarded candidate to Administrator for final authorization.',
       });
-      setRequests((prev) => prev.filter((r) => r.id !== targetId));
-      setEndorseModal({ open: false, req: null });
+      window.dispatchEvent(new Event('app_sync'));
     } catch (err) {
       addToast({
         type: 'error',
@@ -104,6 +105,7 @@ export default function CreatorRequests() {
         message: 'Student has been notified.',
       });
       fetchQueue();
+      window.dispatchEvent(new Event('app_sync'));
     } catch (err) {
       console.error(err);
     }

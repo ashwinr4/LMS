@@ -85,24 +85,27 @@ export async function requestEnrollment(req, res) {
       logger.warn(`Failed to create notification record: ${notifErr.message}`);
     }
 
-    // Broadcast WebSocket event to Creator Room and Creator User
+    // Broadcast WebSocket event to the responsible Course Creator
     if (io) {
-      io.to('role_COURSE_CREATOR').emit('creator_new_request', {
-        request,
-        message: `New enrollment request from ${req.user.name} for ${module.title}`,
-      });
-      io.to('role_COURSE_CREATOR').emit('system_notification', {
-        title: 'New Student Enrollment Request',
-        message: `${req.user.name} (${req.user.department || 'Member'}) applied for ${module.title}.`,
-        type: 'ENROLLMENT_REQUEST',
-        link: '/creator/requests',
-      });
-      if (module.instructorId) {
-        io.to(`user_${module.instructorId}`).emit('creator_new_request', {
+      const targetInstructorId = module.instructorId || module.createdBy;
+      if (targetInstructorId) {
+        io.to(`user_${targetInstructorId}`).emit('creator_new_request', {
           request,
           message: `New enrollment request from ${req.user.name} for ${module.title}`,
         });
-        io.to(`user_${module.instructorId}`).emit('system_notification', {
+        io.to(`user_${targetInstructorId}`).emit('system_notification', {
+          title: 'New Student Enrollment Request',
+          message: `${req.user.name} applied for your course: ${module.title}.`,
+          type: 'ENROLLMENT_REQUEST',
+          link: '/creator/requests',
+        });
+      }
+      if (module.createdBy && module.createdBy !== targetInstructorId) {
+        io.to(`user_${module.createdBy}`).emit('creator_new_request', {
+          request,
+          message: `New enrollment request from ${req.user.name} for ${module.title}`,
+        });
+        io.to(`user_${module.createdBy}`).emit('system_notification', {
           title: 'New Student Enrollment Request',
           message: `${req.user.name} applied for your course: ${module.title}.`,
           type: 'ENROLLMENT_REQUEST',
@@ -137,7 +140,7 @@ export async function forwardToAdmin(req, res) {
       where: { id },
       include: {
         student: { select: { id: true, name: true, email: true, department: true } },
-        module: { select: { id: true, code: true, title: true } },
+        module: { select: { id: true, code: true, title: true, createdBy: true, instructorId: true } },
       },
     });
 
@@ -150,6 +153,21 @@ export async function forwardToAdmin(req, res) {
         success: false,
         message: `Request is already in state: ${request.status}`,
       });
+    }
+
+    // Ownership validation: Course Creators can only forward requests for their own courses
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        request.creatorId === req.user.id ||
+        request.module?.createdBy === req.user.id ||
+        request.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to endorse enrollment requests for your own courses.',
+        });
+      }
     }
 
     const updated = await prisma.courseEnrollmentRequest.update({
@@ -165,13 +183,16 @@ export async function forwardToAdmin(req, res) {
       },
     });
 
+    const studentName = updated?.student?.name || request.student?.name || 'Student';
+    const moduleTitle = updated?.module?.title || request.module?.title || 'Course';
+
     // Create In-App Notification for Admins
     try {
       await prisma.notification.create({
         data: {
           targetRole: 'ADMIN',
           title: 'Enrollment Application Endorsed',
-          message: `Instructor endorsed ${updated.student.name} for ${updated.module.title}. Final approval required.`,
+          message: `Instructor endorsed ${studentName} for ${moduleTitle}. Final approval required.`,
           type: 'ENROLLMENT_REQUEST',
           link: '/admin/approvals?tab=enrollments',
           metadata: JSON.stringify({ requestId: updated.id, moduleId: updated.moduleId }),
@@ -189,19 +210,27 @@ export async function forwardToAdmin(req, res) {
         type: 'ENROLLMENT_FORWARDED',
         request: updated,
         requestId: updated.id,
-        message: `Instructor endorsed ${updated.student.name} for ${updated.module.title}`,
+        message: `Instructor endorsed ${studentName} for ${moduleTitle}`,
       });
       io.to('role_ADMIN').emit('system_notification', {
         title: 'Enrollment Application Endorsed',
-        message: `Instructor endorsed ${updated.student.name} for ${updated.module.title}. Final approval required.`,
+        message: `Instructor endorsed ${studentName} for ${moduleTitle}. Final approval required.`,
         type: 'ENROLLMENT_REQUEST',
         link: '/admin/approvals?tab=enrollments',
       });
 
-      // Decrement Creator Queue
-      io.to('role_COURSE_CREATOR').emit('creator_request_resolved', {
-        requestId: updated.id,
-      });
+      // Decrement Creator Queue for the course owner
+      const targetInstructorId = request.creatorId || request.module?.instructorId || request.module?.createdBy;
+      if (targetInstructorId) {
+        io.to(`user_${targetInstructorId}`).emit('creator_request_resolved', {
+          requestId: updated.id,
+        });
+      }
+      if (request.module?.createdBy && request.module.createdBy !== targetInstructorId) {
+        io.to(`user_${request.module.createdBy}`).emit('creator_request_resolved', {
+          requestId: updated.id,
+        });
+      }
 
       // Update Student Live Waiting Room
       io.to(`user_${updated.studentId}`).emit('enrollment_status_updated', {
@@ -361,12 +390,27 @@ export async function rejectEnrollment(req, res) {
       where: { id },
       include: {
         student: { select: { id: true, name: true, email: true } },
-        module: { select: { id: true, title: true } },
+        module: { select: { id: true, title: true, createdBy: true, instructorId: true } },
       },
     });
 
     if (!request) {
       return res.status(404).json({ success: false, message: 'Enrollment request not found.' });
+    }
+
+    // Ownership validation: Course Creators can only decline requests for their own courses
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        request.creatorId === req.user.id ||
+        request.module?.createdBy === req.user.id ||
+        request.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to reject enrollment requests for your own courses.',
+        });
+      }
     }
 
     const updated = await prisma.courseEnrollmentRequest.update({
@@ -409,8 +453,13 @@ export async function rejectEnrollment(req, res) {
       // Synchronize Queue Badges
       if (req.user.role === 'ADMIN') {
         io.to('role_ADMIN').emit('admin_request_resolved', { requestId: request.id });
-      } else {
-        io.to('role_COURSE_CREATOR').emit('creator_request_resolved', { requestId: request.id });
+      }
+      const targetInstructorId = request.creatorId || request.module?.instructorId || request.module?.createdBy;
+      if (targetInstructorId) {
+        io.to(`user_${targetInstructorId}`).emit('creator_request_resolved', { requestId: request.id });
+      }
+      if (request.module?.createdBy && request.module.createdBy !== targetInstructorId) {
+        io.to(`user_${request.module.createdBy}`).emit('creator_request_resolved', { requestId: request.id });
       }
     }
 
@@ -432,8 +481,19 @@ export async function rejectEnrollment(req, res) {
 // ============================================================
 export async function getCreatorQueue(req, res) {
   try {
+    const where = { status: 'PENDING_CREATOR' };
+
+    // For COURSE_CREATOR accounts, only return requests for courses owned or instructed by this creator
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      where.OR = [
+        { creatorId: req.user.id },
+        { module: { createdBy: req.user.id } },
+        { module: { instructorId: req.user.id } },
+      ];
+    }
+
     const requests = await prisma.courseEnrollmentRequest.findMany({
-      where: { status: 'PENDING_CREATOR' },
+      where,
       include: {
         student: { select: { id: true, name: true, email: true, department: true, avatar: true } },
         module: { select: { id: true, code: true, title: true, level: true, department: true } },
@@ -553,8 +613,16 @@ export async function getMyRequests(req, res) {
  */
 export async function getCreatorQueueCount(req, res) {
   try {
+    const where = { status: 'PENDING_CREATOR' };
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      where.OR = [
+        { creatorId: req.user.id },
+        { module: { createdBy: req.user.id } },
+        { module: { instructorId: req.user.id } },
+      ];
+    }
     const count = await prisma.courseEnrollmentRequest.count({
-      where: { status: 'PENDING_CREATOR' },
+      where,
     });
     return res.status(200).json({ success: true, count });
   } catch (error) {

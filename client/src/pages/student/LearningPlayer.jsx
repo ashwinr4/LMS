@@ -89,6 +89,8 @@ export default function LearningPlayer() {
   const [progress, setProgress] = useState({ completedLessons: [], progress: 0, lastActive: null });
   const [currentSectionIdx, setCurrentSectionIdx] = useState(0);
   const [currentLessonIdx, setCurrentLessonIdx] = useState(0);
+  const [initialLoaded, setInitialLoaded] = useState(false);
+  const lastPersistedRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [markingComplete, setMarkingComplete] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -109,7 +111,7 @@ export default function LearningPlayer() {
 
   // Derive flat lesson list and current lesson
   const allLessons = module?.sections?.flatMap((s, si) =>
-    s.lessons.map((l, li) => ({ ...l, sectionIdx: si, lessonIdx: li, sectionTitle: s.title }))
+    (s.lessons || []).map((l, li) => ({ ...l, sectionIdx: si, lessonIdx: li, sectionTitle: s.title }))
   ) || [];
 
   const currentLesson = module?.sections?.[currentSectionIdx]?.lessons?.[currentLessonIdx];
@@ -151,7 +153,8 @@ export default function LearningPlayer() {
           api.get(`/modules/${moduleId}`),
           api.get(`/modules/${moduleId}/progress`),
         ]);
-        setModule(modRes.data.module);
+        const mod = modRes.data.module;
+        setModule(mod);
 
         const prog = progRes.data;
         setProgress({
@@ -161,10 +164,23 @@ export default function LearningPlayer() {
         });
 
         // Restore last position
+        let restoredSection = 0;
+        let restoredLesson = 0;
         if (prog.lastActive) {
-          setCurrentSectionIdx(prog.lastActive.sectionIdx || 0);
-          setCurrentLessonIdx(prog.lastActive.lessonIdx || 0);
+          const sIdx = Number(prog.lastActive.sectionIdx);
+          const lIdx = Number(prog.lastActive.lessonIdx);
+          if (!isNaN(sIdx) && !isNaN(lIdx)) {
+            // Verify section and lesson indices exist within module
+            if (mod?.sections?.[sIdx]?.lessons?.[lIdx]) {
+              restoredSection = sIdx;
+              restoredLesson = lIdx;
+            }
+          }
         }
+        setCurrentSectionIdx(restoredSection);
+        setCurrentLessonIdx(restoredLesson);
+        lastPersistedRef.current = `${restoredSection}_${restoredLesson}`;
+        setInitialLoaded(true);
       } catch (err) {
         console.error('Failed to load course:', err);
       } finally {
@@ -267,6 +283,22 @@ export default function LearningPlayer() {
     return () => clearInterval(progressSaveTimer.current);
   }, [currentLesson, saveTimestamp]);
 
+  // Persist current learning position on open or switch (does not mark complete)
+  useEffect(() => {
+    if (!initialLoaded || !moduleId || !currentLesson) return;
+    const key = `${currentSectionIdx}_${currentLessonIdx}`;
+    if (lastPersistedRef.current === key) return;
+    lastPersistedRef.current = key;
+
+    api.post(`/modules/lessons/${currentLesson.id}/complete`, {
+      moduleId,
+      sectionIdx: currentSectionIdx,
+      lessonIdx: currentLessonIdx,
+      timestamp: 0,
+      markAsFinished: false,
+    }).catch(() => {});
+  }, [initialLoaded, moduleId, currentSectionIdx, currentLessonIdx, currentLesson]);
+
   // Mark lesson complete and unlock next sequential lecture
   const markComplete = async () => {
     if (!currentLesson || isCompleted) return;
@@ -286,6 +318,12 @@ export default function LearningPlayer() {
         progress: data.progress,
       }));
       setUnlockedSuccess(true);
+
+      // Immediately notify all views and listeners (e.g. MyCourses) of progress change
+      window.dispatchEvent(new Event('app_sync'));
+      if (socket) {
+        socket.emit('curriculum_updated', { moduleId });
+      }
 
       // Auto-advance to next sequential lesson
       setTimeout(() => {
@@ -327,6 +365,9 @@ export default function LearningPlayer() {
 
   const videoProgressPercent = duration > 0 ? Math.min(Math.round((currentTime / duration) * 100), 100) : 0;
   const resolvedMediaUrl = resolveMediaUrl(currentLesson?.videoUrl);
+  const isPlayableVideo = Boolean(
+    currentLesson?.type === 'VIDEO' && resolvedMediaUrl && !videoError
+  );
   const isPdfDocument = currentLesson?.documentName?.toLowerCase().endsWith('.pdf') || resolvedMediaUrl.toLowerCase().endsWith('.pdf');
 
   if (loading) {
@@ -459,18 +500,30 @@ export default function LearningPlayer() {
                     <AlertTriangle className="h-10 w-10 text-amber-500" />
                     <h3 className="text-base font-semibold text-slate-200">Video Lecture Unavailable</h3>
                     <p className="text-xs text-slate-400 max-w-sm">
-                      The video file could not be streamed or has not yet been uploaded by the course creator.
+                      The video file could not be streamed, is in demo mode, or has not yet been uploaded. You can still complete this lesson using the button below.
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setVideoError(false);
-                        if (videoRef.current) videoRef.current.load();
-                      }}
-                      className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 text-xs font-medium transition-colors border border-slate-700"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" /> Retry Playback
-                    </button>
+                    <div className="flex items-center gap-3 mt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoError(false);
+                          if (videoRef.current) videoRef.current.load();
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 hover:bg-slate-700 text-xs font-medium transition-colors border border-slate-700"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" /> Retry Playback
+                      </button>
+                      {!isCompleted && (
+                        <button
+                          type="button"
+                          disabled={markingComplete}
+                          onClick={markComplete}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium transition-colors shadow-sm"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Mark Lesson Complete
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -653,7 +706,7 @@ export default function LearningPlayer() {
                 </Button>
 
                 {!isCompleted ? (
-                  currentLesson?.type === 'VIDEO' ? (
+                  isPlayableVideo ? (
                     duration > 0 && currentTime >= duration - 2 ? (
                       <Button
                         size="sm"

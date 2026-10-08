@@ -198,6 +198,22 @@ export async function updateModule(req, res) {
     const { id } = req.params;
     const { outcomes, prerequisites, ...rest } = req.body;
 
+    const existing = await prisma.module.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Module not found.' });
+    }
+
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner = existing.createdBy === req.user.id || existing.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to modify your own courses.',
+        });
+      }
+    }
+
     const module = await prisma.module.update({
       where: { id },
       data: {
@@ -228,6 +244,23 @@ export async function updateModule(req, res) {
 export async function deleteModule(req, res) {
   try {
     const { id } = req.params;
+
+    const existing = await prisma.module.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Module not found.' });
+    }
+
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner = existing.createdBy === req.user.id || existing.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to delete your own courses.',
+        });
+      }
+    }
+
     await prisma.module.delete({ where: { id } });
     cache.invalidatePrefix('modules:');
     cache.invalidatePrefix('admin:');
@@ -253,6 +286,22 @@ export async function createSection(req, res) {
 
     if (!title) return res.status(400).json({ success: false, message: 'Section title is required.' });
 
+    const parentModule = await prisma.module.findUnique({ where: { id: moduleId } });
+    if (!parentModule) {
+      return res.status(404).json({ success: false, message: 'Course module not found.' });
+    }
+
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner = parentModule.createdBy === req.user.id || parentModule.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to add sections to your own courses.',
+        });
+      }
+    }
+
     const count = await prisma.section.count({ where: { moduleId } });
     const section = await prisma.section.create({
       data: { moduleId, title, order: count },
@@ -274,6 +323,28 @@ export async function createSection(req, res) {
 export async function updateSection(req, res) {
   try {
     const { sectionId } = req.params;
+
+    const existingSection = await prisma.section.findUnique({
+      where: { id: sectionId },
+      include: { module: { select: { createdBy: true, instructorId: true } } },
+    });
+    if (!existingSection) {
+      return res.status(404).json({ success: false, message: 'Section not found.' });
+    }
+
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        existingSection.module?.createdBy === req.user.id ||
+        existingSection.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to modify sections in your own courses.',
+        });
+      }
+    }
+
     const section = await prisma.section.update({
       where: { id: sectionId },
       data: req.body,
@@ -294,7 +365,28 @@ export async function updateSection(req, res) {
 export async function deleteSection(req, res) {
   try {
     const { sectionId } = req.params;
-    const existingSection = await prisma.section.findUnique({ where: { id: sectionId } });
+    const existingSection = await prisma.section.findUnique({
+      where: { id: sectionId },
+      include: { module: { select: { createdBy: true, instructorId: true } } },
+    });
+
+    if (!existingSection) {
+      return res.status(404).json({ success: false, message: 'Section not found.' });
+    }
+
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        existingSection.module?.createdBy === req.user.id ||
+        existingSection.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to delete sections in your own courses.',
+        });
+      }
+    }
+
     await prisma.section.delete({ where: { id: sectionId } });
     cache.invalidatePrefix('modules:');
 
@@ -319,12 +411,33 @@ export async function createLesson(req, res) {
 
     if (!title || !type) return res.status(400).json({ success: false, message: 'Title and type required.' });
 
+    const section = await prisma.section.findUnique({
+      where: { id: sectionId },
+      include: { module: { select: { createdBy: true, instructorId: true } } },
+    });
+
+    if (!section) {
+      return res.status(404).json({ success: false, message: 'Section not found.' });
+    }
+
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        section.module?.createdBy === req.user.id ||
+        section.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to add lessons to your own courses.',
+        });
+      }
+    }
+
     const count = await prisma.lesson.count({ where: { sectionId } });
     const lesson = await prisma.lesson.create({
       data: { sectionId, title, type, videoUrl, content, documentName, duration, notes, order: count },
     });
 
-    const section = await prisma.section.findUnique({ where: { id: sectionId }, select: { moduleId: true } });
     cache.invalidatePrefix('modules:');
 
     if (io && section?.moduleId) {
@@ -341,6 +454,33 @@ export async function createLesson(req, res) {
 export async function updateLesson(req, res) {
   try {
     const { lessonId } = req.params;
+
+    const existingLesson = await prisma.lesson.findUnique({
+      where: { id: lessonId },
+      include: {
+        section: {
+          include: { module: { select: { createdBy: true, instructorId: true } } },
+        },
+      },
+    });
+
+    if (!existingLesson) {
+      return res.status(404).json({ success: false, message: 'Lesson not found.' });
+    }
+
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        existingLesson.section?.module?.createdBy === req.user.id ||
+        existingLesson.section?.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to modify lessons in your own courses.',
+        });
+      }
+    }
+
     const lesson = await prisma.lesson.update({
       where: { id: lessonId },
       data: req.body,
@@ -364,8 +504,30 @@ export async function deleteLesson(req, res) {
     const { lessonId } = req.params;
     const existingLesson = await prisma.lesson.findUnique({
       where: { id: lessonId },
-      include: { section: { select: { moduleId: true } } },
+      include: {
+        section: {
+          include: { module: { select: { createdBy: true, instructorId: true } } },
+        },
+      },
     });
+
+    if (!existingLesson) {
+      return res.status(404).json({ success: false, message: 'Lesson not found.' });
+    }
+
+    if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const isOwner =
+        existingLesson.section?.module?.createdBy === req.user.id ||
+        existingLesson.section?.module?.instructorId === req.user.id;
+      if (!isOwner) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_OWNERSHIP',
+          message: 'You are only authorized to delete lessons in your own courses.',
+        });
+      }
+    }
+
     await prisma.lesson.delete({ where: { id: lessonId } });
     cache.invalidatePrefix('modules:');
 
@@ -413,16 +575,35 @@ export async function completeLesson(req, res) {
       ? JSON.parse(assignment.completedLessons)
       : [];
 
-    const lessonKey = `${sectionIdx}_${lessonIdx}`;
+    const parsedSectionIdx = Number(sectionIdx) || 0;
+    const parsedLessonIdx = Number(lessonIdx) || 0;
+    const lessonKey = `${parsedSectionIdx}_${parsedLessonIdx}`;
 
-    // Only mark complete if explicitly requested (not just periodic timestamp save)
+    // Total lessons calculation
+    const totalLessons = (assignment.module?.sections || []).reduce(
+      (sum, sec) => sum + (sec.lessons?.length || 0), 0
+    ) || 1;
+
+    let progress = assignment.progress || 0;
+    let isCompleted = progress >= 100;
+
+    const updatedData = {
+      lastActive: JSON.stringify({
+        sectionIdx: parsedSectionIdx,
+        lessonIdx: parsedLessonIdx,
+        lessonId: lessonId || null,
+        timestamp: Number(timestamp) || 0,
+      }),
+    };
+
+    // Only mark complete if explicitly requested (not just position save or heartbeat)
     if (markAsFinished) {
       // Enforce strict sequential unlocking on backend
-      const allLessons = assignment.module.sections.flatMap((sec, sI) =>
-        sec.lessons.map((les, lI) => ({ id: les.id, key: `${sI}_${lI}` }))
+      const allLessons = (assignment.module?.sections || []).flatMap((sec, sI) =>
+        (sec.lessons || []).map((les, lI) => ({ id: les.id, key: `${sI}_${lI}` }))
       );
       const currentFlatIdx = allLessons.findIndex(
-        (l) => l.key === lessonKey || l.id === lessonId
+        (l) => l.key === lessonKey || (lessonId && l.id === lessonId)
       );
 
       if (currentFlatIdx > 0) {
@@ -439,31 +620,32 @@ export async function completeLesson(req, res) {
       if (!completedLessons.includes(lessonKey)) {
         completedLessons.push(lessonKey);
       }
-    }
 
-    // Calculate total lessons
-    const totalLessons = assignment.module.sections.reduce(
-      (sum, sec) => sum + sec.lessons.length, 0
-    ) || 1;
-    const progress = Math.round((completedLessons.length / totalLessons) * 100);
-    const isCompleted = progress >= 100;
+      progress = Math.min(100, Math.round((completedLessons.length / totalLessons) * 100));
+      isCompleted = progress >= 100;
+
+      updatedData.completedLessons = JSON.stringify(completedLessons);
+      updatedData.progress = progress;
+      if (isCompleted) {
+        updatedData.status = 'UNDER_REVIEW';
+        if (!assignment.completedAt) {
+          updatedData.completedAt = new Date();
+        }
+      } else if (!assignment.status || assignment.status === 'NOT_STARTED') {
+        updatedData.status = 'IN_PROGRESS';
+      }
+    }
 
     const updated = await prisma.assignment.update({
       where: { userId_moduleId: { userId, moduleId } },
-      data: {
-        completedLessons: JSON.stringify(completedLessons),
-        progress,
-        status: isCompleted ? 'UNDER_REVIEW' : assignment.status || 'IN_PROGRESS',
-        completedAt: isCompleted ? new Date() : undefined,
-        lastActive: JSON.stringify({ sectionIdx, lessonIdx, lessonId, timestamp: timestamp || 0 }),
-      },
+      data: updatedData,
     });
 
     return res.status(200).json({
       success: true,
-      progress,
-      completedLessons,
-      isCompleted,
+      progress: markAsFinished ? progress : assignment.progress,
+      completedLessons: markAsFinished ? completedLessons : (assignment.completedLessons ? JSON.parse(assignment.completedLessons) : []),
+      isCompleted: markAsFinished ? isCompleted : ((assignment.progress || 0) >= 100),
       assignment: updated,
     });
   } catch (error) {
@@ -488,6 +670,17 @@ export async function getModuleProgress(req, res) {
       return res.status(200).json({ success: true, enrolled: false, progress: 0, completedLessons: [] });
     }
 
+    let lastActive = null;
+    if (assignment.lastActive) {
+      try {
+        lastActive = typeof assignment.lastActive === 'string'
+          ? JSON.parse(assignment.lastActive)
+          : assignment.lastActive;
+      } catch (e) {
+        lastActive = null;
+      }
+    }
+
     return res.status(200).json({
       success: true,
       enrolled: true,
@@ -495,7 +688,7 @@ export async function getModuleProgress(req, res) {
       status: assignment.status,
       dueDate: assignment.dueDate,
       completedLessons: assignment.completedLessons ? JSON.parse(assignment.completedLessons) : [],
-      lastActive: assignment.lastActive ? JSON.parse(assignment.lastActive) : null,
+      lastActive,
     });
   } catch (error) {
     logger.error(`Get Progress Error: ${error.message}`);
@@ -526,19 +719,29 @@ export async function getMyAssignments(req, res) {
     return res.status(200).json({
       success: true,
       assignments: assignments.map((a) => {
-        const totalLessons = a.module.sections.reduce((sum, sec) => sum + sec.lessons.length, 0);
+        const totalLessons = (a.module?.sections || []).reduce((sum, sec) => sum + (sec.lessons?.length || 0), 0);
         const completedLessons = a.completedLessons ? JSON.parse(a.completedLessons) : [];
+        let lastActive = null;
+        if (a.lastActive) {
+          try {
+            lastActive = typeof a.lastActive === 'string'
+              ? JSON.parse(a.lastActive)
+              : a.lastActive;
+          } catch (e) {
+            lastActive = null;
+          }
+        }
         return {
           id: a.id,
           moduleId: a.moduleId,
-          code: a.module.code,
-          title: a.module.title,
+          code: a.module?.code,
+          title: a.module?.title,
           progress: a.progress,
           status: a.status,
           dueDate: a.dueDate,
           completedLessonsCount: completedLessons.length,
           totalLessons,
-          lastActive: a.lastActive ? JSON.parse(a.lastActive) : null,
+          lastActive,
         };
       }),
     });

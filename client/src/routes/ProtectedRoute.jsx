@@ -27,7 +27,7 @@ export function ProtectedRoute({ children, allowedRoles }) {
     if (user.role === 'ADMIN') return <Navigate to={ROUTES.ADMIN_DASHBOARD} replace />;
     if (user.role === 'COURSE_CREATOR') return <Navigate to={ROUTES.CREATOR_DASHBOARD} replace />;
     if (user.role === 'MODERATOR') return <Navigate to={ROUTES.MODERATOR_DASHBOARD} replace />;
-    return <Navigate to="/courses" replace />;
+    return <Navigate to={ROUTES.MY_COURSES} replace />;
   }
 
   return children;
