@@ -339,6 +339,14 @@ export function AppRoutes() {
         {/* ═══════════════════════════════════════════════════════ */}
         <Route path="admin" element={<Navigate to={ROUTES.ADMIN_DASHBOARD} replace />} />
         <Route path="admin/users" element={<Navigate to={ROUTES.ADMIN_USERS} replace />} />
+        <Route
+          path="admin/users/:userId"
+          element={
+            <ProtectedRoute allowedRoles={['ADMIN']}>
+              <AdminUserDetail />
+            </ProtectedRoute>
+          }
+        />
         <Route path="admin/courses" element={<Navigate to={ROUTES.ADMIN_COURSES} replace />} />
         <Route path="admin/approvals" element={<Navigate to={ROUTES.ADMIN_APPROVALS} replace />} />
         <Route path="admin/audit" element={<Navigate to={ROUTES.ADMIN_AUDIT} replace />} />
@@ -355,6 +363,14 @@ export function AppRoutes() {
 
         <Route path="moderator" element={<Navigate to={ROUTES.MODERATOR_DASHBOARD} replace />} />
         <Route path="moderator/users" element={<Navigate to={ROUTES.MODERATOR_USERS} replace />} />
+        <Route
+          path="moderator/users/:userId"
+          element={
+            <ProtectedRoute allowedRoles={['MODERATOR', 'ADMIN']}>
+              <ModeratorUserDetail />
+            </ProtectedRoute>
+          }
+        />
         <Route path="moderator/courses" element={<Navigate to={ROUTES.MODERATOR_COURSES} replace />} />
         <Route path="moderator/transfers" element={<Navigate to={ROUTES.MODERATOR_TRANSFERS} replace />} />
         <Route path="moderator/*" element={<Navigate to={ROUTES.MODERATOR_DASHBOARD} replace />} />

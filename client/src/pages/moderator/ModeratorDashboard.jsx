@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api.js';
+import { ROUTES } from '../../routes/routeMap.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useSocket } from '../../context/SocketContext.jsx';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
@@ -177,7 +178,7 @@ export default function ModeratorDashboard() {
       <div className="grid md:grid-cols-2 gap-6">
         {canViewCourses && (
           <div
-            onClick={() => navigate('/moderator/courses')}
+            onClick={() => navigate(ROUTES.MODERATOR_COURSES)}
             className="bg-card border border-app rounded-card p-6 space-y-3 cursor-pointer hover:border-brand-500/50 hover:shadow-md transition-all"
           >
             <div className="flex items-center justify-between">
@@ -195,7 +196,7 @@ export default function ModeratorDashboard() {
 
         {canViewUsers && (
           <div
-            onClick={() => navigate('/moderator/users')}
+            onClick={() => navigate(ROUTES.MODERATOR_USERS)}
             className="bg-card border border-app rounded-card p-6 space-y-3 cursor-pointer hover:border-purple-500/50 hover:shadow-md transition-all"
           >
             <div className="flex items-center justify-between">

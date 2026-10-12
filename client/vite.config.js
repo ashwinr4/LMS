@@ -6,6 +6,28 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const CSP_DIRECTIVES = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob: https: http://localhost:5050",
+  "media-src 'self' blob: data: http://localhost:5050 https:",
+  "connect-src 'self' http://localhost:5050 ws://localhost:5050 ws://localhost:5173 https://*.onrender.com wss://*.onrender.com https://accounts.google.com",
+  "frame-src 'self' https://accounts.google.com https://www.youtube.com https://youtube.com blob: data:",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+].join('; ');
+
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Content-Security-Policy': CSP_DIRECTIVES,
+};
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -15,6 +37,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    headers: SECURITY_HEADERS,
     proxy: {
       '/api': {
         target: 'http://localhost:5050',
@@ -53,6 +76,10 @@ export default defineConfig({
         },
       },
     },
+  },
+  preview: {
+    port: 5173,
+    headers: SECURITY_HEADERS,
   },
   build: {
     rollupOptions: {

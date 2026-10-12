@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api.js';
+import { ROUTES } from '../../routes/routeMap.js';
 import { PageHeader } from '../../components/ui/PageHeader.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Input } from '../../components/ui/Input.jsx';
@@ -130,7 +131,7 @@ export default function ModeratorUsers() {
                   .map((u) => (
                   <tr
                     key={u.id}
-                    onClick={() => navigate(`/moderator/users/${u.id}`)}
+                    onClick={() => navigate(ROUTES.MODERATOR_USER_DETAIL(u.id))}
                     className="table-row-inset-divider hover:bg-surface-tertiary/40 dark:hover:bg-dark-elevated/40 cursor-pointer transition-colors group"
                   >
                     <td className="py-3 px-4">
