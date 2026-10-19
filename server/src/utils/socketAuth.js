@@ -128,3 +128,91 @@ export async function canUserAccessCourseRoom(user, courseId, dbClient = prisma)
     return { allowed: false, reason: 'DATABASE_ERROR' };
   }
 }
+
+/**
+ * Production Socket.IO Handler Registration
+ * Registers event listeners for authenticated socket connections.
+ * Shared between production server initialization and integration test suites.
+ *
+ * @param {object} socket - Connected Socket.IO socket instance
+ * @param {object} io - Socket.IO server instance
+ * @param {object} [dbClient=prisma] - Database client (allows dependency injection for testing)
+ */
+export function registerSocketHandlers(socket, io, dbClient = prisma) {
+  // Join role room (Authenticated and verified role only)
+  socket.on('join_role_room', (role) => {
+    if (!socket.user || (socket.user.role !== role && socket.user.role !== 'ADMIN')) {
+      logger.warn(`Unauthorized WebSocket role room subscription attempt: socket ${socket.id} attempted to join role_${role}`);
+      socket.emit('socket_error', {
+        event: 'join_role_room',
+        error: 'FORBIDDEN_ROLE_ROOM',
+        message: `You are not authorized to subscribe to role_${role}.`,
+      });
+      return;
+    }
+    const room = `role_${role}`;
+    socket.join(room);
+    socket.emit('room_joined', { room, success: true });
+    logger.info(`Socket ${socket.id} joined role room: ${room}`);
+  });
+
+  // Join user room for targeted notifications (Authenticated self or admin only)
+  socket.on('join_user_room', (userId) => {
+    const callerId = socket.user?.sub || socket.user?.id;
+    if (!socket.user || (callerId !== userId && socket.user.role !== 'ADMIN')) {
+      logger.warn(`Unauthorized WebSocket user room subscription attempt: socket ${socket.id} attempted to join user_${userId}`);
+      socket.emit('socket_error', {
+        event: 'join_user_room',
+        error: 'FORBIDDEN_USER_ROOM',
+        message: `You are not authorized to subscribe to user_${userId}.`,
+      });
+      return;
+    }
+    const room = `user_${userId}`;
+    socket.join(room);
+    socket.emit('room_joined', { room, success: true });
+    logger.info(`Socket ${socket.id} joined user room: ${room}`);
+  });
+
+  // Join course room for real-time curriculum and player updates (Strictly authorized)
+  socket.on('join_course_room', async (courseId) => {
+    if (!courseId) return;
+
+    try {
+      const access = await canUserAccessCourseRoom(socket.user, courseId, dbClient);
+      if (!access.allowed) {
+        logger.warn(
+          `Unauthorized WebSocket course room join attempt: user ${socket.user?.id} (${socket.user?.role}) denied for course ${courseId}. Reason: ${access.reason}`
+        );
+        socket.emit('socket_error', {
+          event: 'join_course_room',
+          error: 'FORBIDDEN_COURSE_ACCESS',
+          message: 'You are not authorized to join updates for this course room.',
+          reason: access.reason,
+        });
+        return;
+      }
+
+      const room = `course_${courseId}`;
+      socket.join(room);
+      socket.emit('room_joined', { room, success: true });
+      logger.info(`Socket ${socket.id} (User: ${socket.user?.id}) joined course room: ${room}`);
+    } catch (err) {
+      logger.error(`Error validating course room join for socket ${socket.id}: ${err.message}`);
+    }
+  });
+
+  socket.on('leave_course_room', (courseId) => {
+    if (courseId) {
+      const room = `course_${courseId}`;
+      socket.leave(room);
+      socket.emit('room_left', { room, success: true });
+      logger.info(`Socket ${socket.id} left course room: ${room}`);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    logger.info(`WebSocket Client Disconnected: ${socket.id}`);
+  });
+}
+
