@@ -6,6 +6,7 @@ import { useSocket } from '../../context/SocketContext.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { Avatar } from '../../components/ui/Avatar.jsx';
 import { SegmentedToggle } from '../../components/ui/SegmentedToggle.jsx';
+import { resolveMediaUrl } from '../../utils/media.js';
 import {
   Megaphone,
   Users,
@@ -808,20 +809,20 @@ export default function Inbox() {
                         <div className="mb-2">
                           {msg.fileType?.startsWith('image/') ? (
                             <a
-                              href={msg.fileUrl}
+                              href={resolveMediaUrl(msg.fileUrl)}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="block rounded-lg overflow-hidden border border-white/20 hover:opacity-95 transition-opacity"
                             >
                               <img
-                                src={msg.fileUrl}
+                                src={resolveMediaUrl(msg.fileUrl)}
                                 alt={msg.fileName || 'Attachment'}
                                 className="max-h-60 w-full object-cover rounded-md"
                               />
                             </a>
                           ) : (
                             <a
-                              href={msg.fileUrl}
+                              href={resolveMediaUrl(msg.fileUrl)}
                               target="_blank"
                               rel="noopener noreferrer"
                               download={msg.fileName}

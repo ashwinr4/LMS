@@ -1,5 +1,6 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
+import { cache } from '../utils/cache.js';
 import crypto from 'crypto';
 import { io } from '../server.js';
 import { scanDocumentSecurity } from '../utils/documentScanner.js';
@@ -622,6 +623,15 @@ export async function startExam(req, res) {
       points: q.points || 1,
     }));
 
+    // Register active exam session in server-side cache for tamper-proof submission grading
+    cache.set(`exam_session:${userId}:${assessment.id}`, {
+      assessmentId: assessment.id,
+      userId,
+      questionIds: sampled.map((q) => q.id),
+      totalExpectedQuestions: sampled.length,
+      startedAt: Date.now(),
+    }, 7200); // 2 hours TTL
+
     return res.status(200).json({
       success: true,
       session: {
@@ -652,25 +662,110 @@ export async function submitExam(req, res) {
   try {
     const { id } = req.params;
     const userId = req.user.id;
-    const { answers, questionIds, violations } = req.body;
+    const { answers, violations } = req.body;
 
     const assessment = await prisma.assessment.findUnique({
       where: { id },
-      include: { module: { select: { title: true, code: true } } },
+      include: { module: { select: { id: true, title: true, code: true, status: true } } },
     });
     if (!assessment) {
       return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Assessment not found.' });
+    }
+
+    // 1. Enrollment and course unlock verification
+    const assignment = await prisma.assignment.findUnique({
+      where: { userId_moduleId: { userId, moduleId: assessment.moduleId } },
+    });
+    if (!assignment || assignment.status === 'EXPIRED') {
+      return res.status(403).json({
+        success: false,
+        error: 'NOT_ENROLLED',
+        message: 'You are not actively enrolled in the course for this assessment.',
+      });
+    }
+
+    if (assignment.progress < 80) {
+      return res.status(403).json({
+        success: false,
+        error: 'EXAM_LOCKED',
+        message: `Complete at least 80% of the course (current: ${assignment.progress}%) before submitting.`,
+      });
+    }
+
+    // 2. State transition check: Prevent duplicate submissions if already passed
+    const alreadyPassed = await prisma.assessmentSubmission.findFirst({
+      where: { assessmentId: id, userId, passed: true },
+    });
+    if (alreadyPassed) {
+      return res.status(400).json({
+        success: false,
+        error: 'ALREADY_PASSED',
+        message: 'You have already completed and passed this assessment.',
+      });
+    }
+
+    // 3. State transition check: Enforce active disqualification or attempt cooldown
+    const lastAttempt = await prisma.assessmentSubmission.findFirst({
+      where: { assessmentId: id, userId },
+      orderBy: { submittedAt: 'desc' },
+    });
+    if (lastAttempt && !lastAttempt.passed) {
+      let feedbackData = {};
+      try {
+        feedbackData = JSON.parse(lastAttempt.feedback || '{}');
+      } catch (e) {}
+      const isPriorDisqualified = feedbackData.disqualified || (feedbackData.violationCount || 0) >= 3;
+      if (isPriorDisqualified || ENABLE_ONE_HOUR_COOLDOWN) {
+        const cooldownMs = isPriorDisqualified
+          ? 7 * 24 * 60 * 60 * 1000 // 7 Days
+          : 1 * 60 * 60 * 1000;     // 1 Hour
+
+        const submittedTime = new Date(lastAttempt.submittedAt).getTime();
+        const expiresAt = new Date(submittedTime + cooldownMs);
+        if (Date.now() < expiresAt.getTime()) {
+          return res.status(403).json({
+            success: false,
+            error: isPriorDisqualified ? 'DISQUALIFIED_COOLDOWN' : 'COOLDOWN_ACTIVE',
+            message: isPriorDisqualified
+              ? 'You cannot submit this exam while under a 7-day violation disqualification penalty.'
+              : 'You cannot submit this exam while under an active attempt cooldown.',
+          });
+        }
+      }
+    }
+
+    // 4. Server-Authoritative Anti-Tamper: Verify active exam session
+    const activeSession = cache.get(`exam_session:${userId}:${id}`);
+    if (!activeSession) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_EXAM_SESSION',
+        message: 'No active exam session found. You must launch the exam session before submitting.',
+      });
     }
 
     const allQuestions = JSON.parse(assessment.questions || '[]');
     const questionMap = {};
     allQuestions.forEach((q) => { questionMap[q.id] = q; });
 
+    // Use strictly the question allocations established by the server session
+    const finalQuestionIds = (Array.isArray(activeSession.questionIds) && activeSession.questionIds.length > 0)
+      ? [...activeSession.questionIds]
+      : [];
+
+    if (finalQuestionIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_EXAM_SESSION',
+        message: 'Active exam session contains no valid question allocations.',
+      });
+    }
+
     let totalPoints = 0;
     let earnedPoints = 0;
     const gradedAnswers = [];
 
-    for (const qId of (questionIds || [])) {
+    for (const qId of finalQuestionIds) {
       const question = questionMap[qId];
       if (!question) continue;
       const studentAnswer = answers ? answers[qId] : undefined;
@@ -680,19 +775,21 @@ export async function submitExam(req, res) {
 
       let isCorrect = false;
       const qType = question.type || 'MCQ';
-      if (qType === 'MCQ' || qType === 'TRUE_FALSE') {
-        isCorrect = Number(studentAnswer) === Number(correctAns);
-      } else if (qType === 'MULTI_SELECT') {
-        const correct = Array.isArray(correctAns) ? [...correctAns].sort().join(',') : String(correctAns);
-        const given = Array.isArray(studentAnswer) ? [...studentAnswer].sort().join(',') : String(studentAnswer);
-        isCorrect = correct === given;
+      if (studentAnswer !== undefined && studentAnswer !== null && studentAnswer !== '') {
+        if (qType === 'MCQ' || qType === 'TRUE_FALSE') {
+          isCorrect = Number(studentAnswer) === Number(correctAns);
+        } else if (qType === 'MULTI_SELECT') {
+          const correct = Array.isArray(correctAns) ? [...correctAns].sort().join(',') : String(correctAns);
+          const given = Array.isArray(studentAnswer) ? [...studentAnswer].sort().join(',') : String(studentAnswer);
+          isCorrect = correct === given;
+        }
       }
 
       if (isCorrect) earnedPoints += points;
       gradedAnswers.push({
         questionId: qId,
         questionText: question.text || question.prompt,
-        studentAnswer,
+        studentAnswer: studentAnswer !== undefined ? studentAnswer : 'Unanswered',
         correctAnswer: correctAns,
         isCorrect,
         explanation: question.explanation,
@@ -701,11 +798,71 @@ export async function submitExam(req, res) {
       });
     }
 
-    const isDisqualified = req.body.disqualified === true || (violations && violations.length >= 3);
+    // Clean up active session immediately to prevent replay submissions
+    cache.delete(`exam_session:${userId}:${id}`);
+
+    // 5. Server Evaluation of Client-Reported Proctoring Telemetry
+    // NOTE: Browser proctoring events originate from client-side observers.
+    // The server validates structure, bounds timestamps to the active session window,
+    // and deduplicates replays, but does not claim client-reported events are independently verified.
+    const ALLOWED_VIOLATION_TYPES = new Set([
+      'TAB_SWITCH',
+      'FULLSCREEN_EXIT',
+      'WINDOW_BLUR',
+      'WINDOW_MINIMIZED',
+      'CLIPBOARD_ACCESS',
+      'COPY_PASTE',
+      'DEV_TOOLS',
+      'WINDOW_RESIZE',
+      'MULTIPLE_DISPLAYS',
+      'KEYBOARD_RESTRICTED',
+    ]);
+
+    const validatedViolations = [];
+    const seenEventKeys = new Set();
+
+    if (Array.isArray(violations)) {
+      const sessionStart = activeSession.startedAt || (Date.now() - 2 * 60 * 60 * 1000);
+      const now = Date.now() + 5000;
+
+      for (const v of violations) {
+        if (!v || typeof v !== 'object') continue;
+        const vType = typeof v.type === 'string' ? v.type.toUpperCase().trim() : '';
+        if (!ALLOWED_VIOLATION_TYPES.has(vType)) continue;
+
+        let vTime = Date.now();
+        if (v.timestamp) {
+          const parsed = new Date(v.timestamp).getTime();
+          if (!isNaN(parsed) && parsed >= sessionStart - 5000 && parsed <= now) {
+            vTime = parsed;
+          }
+        }
+
+        // Deduplicate identical event replays (same event type within same second interval)
+        const eventSecBucket = Math.floor(vTime / 1000);
+        const eventKey = `${vType}:${eventSecBucket}`;
+        if (seenEventKeys.has(eventKey)) continue;
+        seenEventKeys.add(eventKey);
+
+        validatedViolations.push({
+          type: vType,
+          message: typeof v.message === 'string' ? v.message.slice(0, 200) : 'Proctoring violation recorded',
+          timestamp: new Date(vTime).toISOString(),
+        });
+
+        // Cap at 10 to avoid payload flooding
+        if (validatedViolations.length >= 10) break;
+      }
+    }
+
+    const sessionDurationMs = Date.now() - (activeSession.startedAt || Date.now());
+    const sessionElapsedSeconds = Math.max(0, Math.round(sessionDurationMs / 1000));
+
+    const violationCount = validatedViolations.length;
+    // Server enforces disqualification threshold based on client-reported proctoring infractions
+    const isDisqualified = violationCount >= 3;
     const score = isDisqualified ? 0 : (totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0);
     const passed = isDisqualified ? false : (score >= assessment.passingScore);
-    const violationList = violations || [];
-    const violationCount = violationList.length;
 
     const feedback = JSON.stringify({
       score,
@@ -713,9 +870,15 @@ export async function submitExam(req, res) {
       earnedPoints,
       totalPoints,
       violationCount,
-      violations: violationList,
+      violations: validatedViolations,
       disqualified: isDisqualified,
       reason: isDisqualified ? 'VIOLATION_LIMIT_EXCEEDED' : null,
+      violationTelemetrySource: 'CLIENT_REPORTED_BROWSER_EVENTS',
+      serverSession: {
+        startedAt: activeSession.startedAt ? new Date(activeSession.startedAt).toISOString() : null,
+        submittedAt: new Date().toISOString(),
+        elapsedSeconds: sessionElapsedSeconds,
+      },
       gradedAnswers,
     });
 
@@ -805,7 +968,7 @@ export async function submitExam(req, res) {
           action: 'EXAM_DISQUALIFIED',
           resource: `Assessment: ${assessment.title}`,
           details: `Candidate eliminated after 3 security violations. 7-day retake ban applied.`,
-          ipAddress: req.ip || req.headers['x-forwarded-for'] || '127.0.0.1',
+          ipAddress: req.ip || req.headers?.['x-forwarded-for'] || '127.0.0.1',
           riskLevel: 'HIGH',
         },
       });
@@ -917,6 +1080,21 @@ export async function exitExam(req, res) {
       return res.status(404).json({ success: false, error: 'NOT_FOUND', message: 'Assessment not found.' });
     }
 
+    // Enrollment verification
+    const assignment = await prisma.assignment.findUnique({
+      where: { userId_moduleId: { userId, moduleId: assessment.moduleId } },
+    });
+    if (!assignment) {
+      return res.status(403).json({
+        success: false,
+        error: 'NOT_ENROLLED',
+        message: 'You are not enrolled in the course for this assessment.',
+      });
+    }
+
+    // Clear active exam session
+    cache.delete(`exam_session:${userId}:${id}`);
+
     const feedback = JSON.stringify({
       abandoned: true,
       reason: 'EXAM_ABANDONED',
@@ -950,7 +1128,7 @@ export async function exitExam(req, res) {
         action: 'EXAM_ABANDONED',
         resource: `Assessment: ${assessment.title}`,
         details: 'Candidate voluntarily exited the exam session. 1-hour retake cooldown applied.',
-        ipAddress: req.ip || req.headers['x-forwarded-for'] || '127.0.0.1',
+        ipAddress: req.ip || req.headers?.['x-forwarded-for'] || '127.0.0.1',
         riskLevel: 'LOW',
       },
     });

@@ -7,12 +7,22 @@ import { logger } from '../utils/logger.js';
 import { sendOtpEmail, sendWelcomeEmail } from '../utils/email.js';
 import { io } from '../server.js';
 
-const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'esmms_super_secure_access_token_secret_key_2026_x89';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'esmms_super_secure_refresh_token_secret_key_2026_y90';
-const ACCESS_TOKEN_EXPIRES = '12h';
-const REFRESH_TOKEN_EXPIRES_DAYS = 7;
+function getAccessSecret() {
+  return process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+}
+
+function getRefreshSecret() {
+  return process.env.JWT_REFRESH_SECRET || process.env.REFRESH_TOKEN_SECRET;
+}
+
+const ACCESS_TOKEN_EXPIRES = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
+const REFRESH_TOKEN_EXPIRES_DAYS = parseInt(process.env.JWT_REFRESH_EXPIRES_DAYS || '7', 10);
 
 function generateAccessToken(user) {
+  const secret = getAccessSecret();
+  if (!secret) {
+    throw new Error('JWT_ACCESS_SECRET is not configured on the server.');
+  }
   return jwt.sign(
     {
       sub: user.id,
@@ -22,19 +32,23 @@ function generateAccessToken(user) {
       name: user.name,
       department: user.department,
     },
-    JWT_ACCESS_SECRET,
+    secret,
     { expiresIn: ACCESS_TOKEN_EXPIRES }
   );
 }
 
 function generateRefreshToken(user) {
+  const secret = getRefreshSecret();
+  if (!secret) {
+    throw new Error('JWT_REFRESH_SECRET is not configured on the server.');
+  }
   return jwt.sign(
     {
       sub: user.id,
       email: user.email,
       jti: crypto.randomUUID(),
     },
-    JWT_REFRESH_SECRET,
+    secret,
     { expiresIn: `${REFRESH_TOKEN_EXPIRES_DAYS}d` }
   );
 }
@@ -68,7 +82,7 @@ const registerSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   department: z.string().optional(),
-  role: z.enum(['ADMIN', 'MODERATOR', 'COURSE_CREATOR', 'USER']).optional().default('USER'),
+  role: z.enum(['MODERATOR', 'COURSE_CREATOR', 'USER']).optional().default('USER'),
 });
 
 const loginSchema = z.object({
@@ -79,6 +93,16 @@ const loginSchema = z.object({
 // 1. User Registration
 export async function register(req, res) {
   try {
+    // Explicit security guard: Reject any attempt to self-assign ADMIN privileges
+    if (req.body.role === 'ADMIN') {
+      logger.warn(`Privilege escalation attempt blocked: Registration request for ${req.body.email || 'unknown'} attempted ADMIN role.`);
+      return res.status(403).json({
+        success: false,
+        error: 'FORBIDDEN_ROLE',
+        message: 'Administrative accounts cannot be created via public registration. Please contact your system administrator.',
+      });
+    }
+
     const parseResult = registerSchema.safeParse(req.body);
     if (!parseResult.success) {
       return res.status(400).json({
@@ -105,7 +129,10 @@ export async function register(req, res) {
     const passwordHash = await bcrypt.hash(password, 12);
 
     const isModeratorRequest = role === 'MODERATOR';
-    const initialStatus = isModeratorRequest ? 'PENDING_APPROVAL' : 'ACTIVE';
+    const isElevatedRoleRequest = role === 'MODERATOR' || role === 'COURSE_CREATOR';
+    const initialStatus = isElevatedRoleRequest ? 'PENDING_APPROVAL' : 'ACTIVE';
+    // Elevated roles are held in requestedRole until verified by an Administrator
+    const initialRole = isElevatedRoleRequest ? 'USER' : (role || 'USER');
 
     const newUser = await prisma.user.create({
       data: {
@@ -113,9 +140,9 @@ export async function register(req, res) {
         email: email.toLowerCase(),
         passwordHash,
         department: department || 'General',
-        role: role || 'USER',
+        role: initialRole,
         status: initialStatus,
-        requestedRole: isModeratorRequest ? 'MODERATOR' : null,
+        requestedRole: isElevatedRoleRequest ? role : null,
       },
       select: {
         id: true,
@@ -137,11 +164,11 @@ export async function register(req, res) {
         actorName: newUser.name,
         action: 'USER_REGISTERED',
         resource: 'USER',
-        details: isModeratorRequest
-          ? 'User registered requesting Moderator role. Awaiting Administrator verification and permission setup.'
+        details: isElevatedRoleRequest
+          ? `User registered requesting ${role} privileges. Awaiting Administrator verification and permission setup.`
           : `User registered with role ${newUser.role}`,
         ipAddress: req.ip,
-        riskLevel: 'LOW',
+        riskLevel: isElevatedRoleRequest ? 'MEDIUM' : 'LOW',
       },
     });
 
@@ -352,23 +379,32 @@ export async function login(req, res) {
       },
     });
 
-    // Dispatch Live 6-Digit Passcode via Gmail SMTP
-    try {
-      await sendOtpEmail(user.email, otp, user.name, 'Sign In');
-    } catch (emailErr) {
-      logger.warn(`Could not dispatch OTP email: ${emailErr.message}`);
+    // Dispatch Live 6-Digit Passcode via SMTP
+    const emailResult = await sendOtpEmail(user.email, otp, user.name, 'Sign In');
+    if (!emailResult.delivered) {
+      if (process.env.NODE_ENV === 'production') {
+        logger.error(`Login 2FA OTP delivery failed in production for: ${user.email} (${emailResult.error})`);
+        return res.status(503).json({
+          success: false,
+          error: 'EMAIL_DELIVERY_FAILED',
+          message: 'Authentication failed: Email delivery service is not configured or unavailable. Please contact an administrator.',
+        });
+      }
     }
 
-    logger.info(`Login 2FA OTP generated and dispatched for: ${user.email}`);
+    logger.info(`Login 2FA OTP generated for: ${user.email} (Delivered: ${Boolean(emailResult.delivered)}, Simulated: ${Boolean(emailResult.simulated)})`);
 
     return res.status(200).json({
       success: true,
       requiresOtp: true,
       email: user.email,
       mustChangePassword: Boolean(user.mustChangePassword),
-      message: user.mustChangePassword
-        ? `Temporary credentials detected. A 6-digit verification code has been dispatched to ${user.email}.`
-        : `A 6-digit verification code has been dispatched to ${user.email}.`,
+      simulatedEmail: Boolean(emailResult.simulated),
+      message: emailResult.delivered
+        ? (user.mustChangePassword
+            ? `Temporary credentials detected. A 6-digit verification code has been dispatched to ${user.email}.`
+            : `A 6-digit verification code has been dispatched to ${user.email}.`)
+        : `[Dev Mode] Verification code generated (SMTP not configured, passcode logged to server console).`,
     });
   } catch (error) {
     logger.error(`Login Controller Error: ${error.message}`, { stack: error.stack });
@@ -484,9 +520,19 @@ export async function refresh(req, res) {
       });
     }
 
+    const refreshSecret = getRefreshSecret();
+    if (!refreshSecret) {
+      logger.error('CRITICAL: JWT refresh secret is not configured.');
+      return res.status(500).json({
+        success: false,
+        error: 'SERVER_CONFIGURATION_ERROR',
+        message: 'Authentication service is misconfigured.',
+      });
+    }
+
     let decoded;
     try {
-      decoded = jwt.verify(rawRefreshToken, JWT_REFRESH_SECRET);
+      decoded = jwt.verify(rawRefreshToken, refreshSecret);
     } catch {
       return res.status(401).json({
         success: false,
@@ -778,8 +824,23 @@ export async function requestOtp(req, res) {
       },
     });
 
-    // Dispatch live email via Gmail SMTP
-    await sendOtpEmail(user.email, otp, user.name);
+    // Dispatch live email via SMTP
+    const emailResult = await sendOtpEmail(user.email, otp, user.name);
+    if (!emailResult.delivered) {
+      if (process.env.NODE_ENV === 'production') {
+        logger.error(`Password reset OTP delivery failed in production for: ${user.email} (${emailResult.error})`);
+        return res.status(503).json({
+          success: false,
+          error: 'EMAIL_DELIVERY_FAILED',
+          message: 'Unable to deliver verification code. Email delivery service is not configured or unavailable.',
+        });
+      }
+      return res.status(200).json({
+        success: true,
+        simulatedEmail: true,
+        message: '[Dev Mode] Verification code generated (SMTP not configured, passcode logged to server console).',
+      });
+    }
 
     logger.info(`2FA OTP generated and dispatched for ${user.email}`);
 
@@ -937,44 +998,98 @@ const pendingGoogleRegistrations = new Map();
 // 9. Google Single Sign-On (SSO) Controller
 export async function googleLogin(req, res) {
   try {
-    const { credential, profile, role, department, otpCode } = req.body;
+    const { credential, role, department, otpCode } = req.body;
 
+    if (!credential || typeof credential !== 'string' || !credential.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'CREDENTIAL_REQUIRED',
+        message: 'A valid Google ID token credential is required for Google authentication.',
+      });
+    }
+
+    const trimmedCredential = credential.trim();
     let email = null;
     let name = null;
     let avatar = null;
 
-    if (credential) {
-      try {
-        const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
-        if (verifyRes.ok) {
-          const payload = await verifyRes.json();
-          email = payload.email?.toLowerCase();
-          name = payload.name || payload.given_name || 'Google Member';
-          avatar = payload.picture;
-        }
-      } catch (err) {
-        logger.warn(`Google tokeninfo verification network note: ${err.message}`);
+    try {
+      const verifyRes = await fetch(
+        `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(trimmedCredential)}`
+      );
+
+      if (!verifyRes.ok) {
+        logger.warn(`Google tokeninfo verification failed with status: ${verifyRes.status}`);
+        return res.status(401).json({
+          success: false,
+          error: 'INVALID_GOOGLE_CREDENTIAL',
+          message: 'Google ID token verification failed or token has expired.',
+        });
       }
 
-      if (!email) {
-        const decoded = jwt.decode(credential);
-        if (decoded && decoded.email) {
-          email = decoded.email.toLowerCase();
-          name = decoded.name || 'Google Member';
-          avatar = decoded.picture;
-        }
-      }
-    } else if (profile && profile.email) {
-      email = profile.email.toLowerCase();
-      name = profile.name || 'Google Member';
-      avatar = profile.avatar;
-    }
+      const payload = await verifyRes.json();
 
-    if (!email) {
-      return res.status(400).json({
+      // Validate Issuer
+      const validIssuers = ['accounts.google.com', 'https://accounts.google.com'];
+      if (!payload.iss || !validIssuers.includes(payload.iss)) {
+        logger.warn(`Google SSO token rejected: invalid issuer (${payload.iss})`);
+        return res.status(401).json({
+          success: false,
+          error: 'INVALID_ISSUER',
+          message: 'Google authentication failed: token issuer is untrusted.',
+        });
+      }
+
+      // Validate Audience (Client ID)
+      const expectedClientId = process.env.GOOGLE_CLIENT_ID;
+      if (expectedClientId && payload.aud !== expectedClientId) {
+        logger.warn(`Google SSO token audience mismatch: expected ${expectedClientId}, got ${payload.aud}`);
+        return res.status(401).json({
+          success: false,
+          error: 'AUDIENCE_MISMATCH',
+          message: 'Google authentication failed: credential audience does not match configured client.',
+        });
+      }
+
+      // Validate Expiry
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (payload.exp && Number(payload.exp) < nowSec) {
+        logger.warn(`Google SSO token expired at ${payload.exp}`);
+        return res.status(401).json({
+          success: false,
+          error: 'TOKEN_EXPIRED',
+          message: 'Google ID token has expired. Please sign in again.',
+        });
+      }
+
+      // Validate Email Verification Claim
+      const isEmailVerified = payload.email_verified === 'true' || payload.email_verified === true;
+      if (!isEmailVerified) {
+        logger.warn(`Google SSO login rejected: email ${payload.email} is not verified by Google.`);
+        return res.status(403).json({
+          success: false,
+          error: 'EMAIL_NOT_VERIFIED',
+          message: 'Your Google email address is unverified. Please verify your email with Google first.',
+        });
+      }
+
+      if (!payload.email) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_GOOGLE_CREDENTIAL',
+          message: 'Google token does not contain an email claim.',
+        });
+      }
+
+      email = payload.email.toLowerCase();
+      name = payload.name || payload.given_name || 'Google Member';
+      avatar = payload.picture || null;
+    } catch (netErr) {
+      logger.error(`Network error during Google tokeninfo verification: ${netErr.message}`);
+      return res.status(502).json({
         success: false,
-        error: 'INVALID_GOOGLE_CREDENTIAL',
-        message: 'Could not extract valid profile details from Google account.',
+        error: 'GOOGLE_VERIFICATION_UNAVAILABLE',
+        message: 'Could not contact Google authentication servers. Please try again.',
       });
     }
 
@@ -984,8 +1099,29 @@ export async function googleLogin(req, res) {
 
     // ── STAGE 1 & 2: NEW USER ONBOARDING (Role Selection & OTP) ──
     if (!user) {
+      const normalizedRole = typeof role === 'string' ? role.trim().toUpperCase() : undefined;
+      const ALLOWED_ONBOARDING_ROLES = ['USER', 'MODERATOR', 'COURSE_CREATOR'];
+
+      // Security guard: Prevent self-assignment of ADMIN via Google onboarding
+      if (normalizedRole === 'ADMIN') {
+        logger.warn(`Privilege escalation attempt blocked in Google SSO onboarding for ${email}`);
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_ROLE',
+          message: 'Administrative accounts cannot be provisioned via public onboarding.',
+        });
+      }
+
+      if (normalizedRole && !ALLOWED_ONBOARDING_ROLES.includes(normalizedRole)) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_ROLE',
+          message: `Invalid role requested. Allowed roles are: ${ALLOWED_ONBOARDING_ROLES.join(', ')}`,
+        });
+      }
+
       // Step A: Prompt user to choose their target role
-      if (!role) {
+      if (!normalizedRole) {
         return res.status(200).json({
           success: true,
           requiresOnboarding: true,
@@ -1005,7 +1141,7 @@ export async function googleLogin(req, res) {
           email: email.toLowerCase(),
           name: name || email.split('@')[0],
           avatar,
-          role,
+          role: normalizedRole,
           department: department || 'Engineering',
           otp: generatedOtp,
           expires: Date.now() + 10 * 60 * 1000,
@@ -1015,13 +1151,13 @@ export async function googleLogin(req, res) {
           logger.warn(`Could not dispatch Google onboarding OTP email: ${emailErr.message}`);
         });
 
-        logger.info(`Google onboarding OTP dispatched to ${email} for role: ${role}`);
+        logger.info(`Google onboarding OTP dispatched to ${email} for role: ${normalizedRole}`);
 
         return res.status(200).json({
           success: true,
           requiresOtp: true,
           email,
-          role,
+          role: normalizedRole,
           department,
           message: `A 6-digit verification code has been dispatched to ${email}.`,
         });
@@ -1037,14 +1173,38 @@ export async function googleLogin(req, res) {
         });
       }
 
+      const pendingRole = typeof pending.role === 'string' ? pending.role.trim().toUpperCase() : 'USER';
+      if (pendingRole === 'ADMIN') {
+        pendingGoogleRegistrations.delete(email.toLowerCase());
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_ROLE',
+          message: 'Administrative accounts cannot be provisioned via public onboarding.',
+        });
+      }
+
+      if (!ALLOWED_ONBOARDING_ROLES.includes(pendingRole)) {
+        pendingGoogleRegistrations.delete(email.toLowerCase());
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_ROLE',
+          message: 'Invalid role stored in pending registration.',
+        });
+      }
+
+      const isElevated = pendingRole === 'MODERATOR' || pendingRole === 'COURSE_CREATOR';
+      const initialStatus = isElevated ? 'PENDING_APPROVAL' : 'ACTIVE';
+      const initialRole = isElevated ? 'USER' : pendingRole;
+
       const dummyPassword = await bcrypt.hash(crypto.randomBytes(16).toString('hex'), 12);
       user = await prisma.user.create({
         data: {
           email,
           name: pending.name || name || email.split('@')[0],
           passwordHash: dummyPassword,
-          role: pending.role || role || 'USER',
-          status: 'ACTIVE',
+          role: initialRole,
+          status: initialStatus,
+          requestedRole: isElevated ? pendingRole : null,
           department: pending.department || department || 'General',
           avatar: pending.avatar || avatar,
         },
@@ -1059,9 +1219,9 @@ export async function googleLogin(req, res) {
           actorName: user.name,
           action: 'USER_REGISTERED_GOOGLE_SSO',
           resource: 'AUTH',
-          details: `User provisioned via Google SSO with role ${user.role} after OTP verification`,
+          details: `User provisioned via Google SSO with role ${user.role} (status: ${user.status}) after OTP verification`,
           ipAddress: req.ip,
-          riskLevel: 'LOW',
+          riskLevel: isElevated ? 'MEDIUM' : 'LOW',
         },
       });
 
@@ -1223,11 +1383,49 @@ export async function requestPasswordReset(req, res) {
  */
 export async function changePassword(req, res) {
   try {
-    const { newPassword } = req.body;
-    if (!newPassword || newPassword.trim().length < 6) {
+    const { currentPassword, newPassword } = req.body;
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User account not found.' });
+    }
+
+    // Require current password for standard password changes
+    if (!user.mustChangePassword) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          success: false,
+          error: 'CURRENT_PASSWORD_REQUIRED',
+          message: 'Current password is required to establish a new password.',
+        });
+      }
+      const isCurrentValid = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!isCurrentValid) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_CREDENTIALS',
+          message: 'Current password does not match existing credentials.',
+        });
+      }
+    } else if (currentPassword) {
+      const isCurrentValid = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!isCurrentValid) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_CREDENTIALS',
+          message: 'Current password does not match existing credentials.',
+        });
+      }
+    }
+
+    // Enforce established password policy (minimum 8 characters)
+    if (!newPassword || newPassword.trim().length < 8) {
       return res.status(400).json({
         success: false,
-        message: 'New password must be at least 6 characters long.',
+        error: 'PASSWORD_TOO_SHORT',
+        message: 'New password must be at least 8 characters long.',
       });
     }
 
@@ -1250,6 +1448,22 @@ export async function changePassword(req, res) {
       },
     });
 
+    // Revoke applicable active sessions across other devices
+    try {
+      const currentRefreshToken = req.cookies?.esmms_refresh_token;
+      const currentHash = currentRefreshToken ? hashToken(currentRefreshToken) : null;
+      await prisma.activeSession.updateMany({
+        where: {
+          userId: req.user.id,
+          isRevoked: false,
+          ...(currentHash ? { refreshTokenHash: { not: currentHash } } : {}),
+        },
+        data: { isRevoked: true },
+      });
+    } catch (sessionErr) {
+      logger.warn(`Could not revoke prior active sessions on password change: ${sessionErr.message}`);
+    }
+
     await prisma.auditLog.create({
       data: {
         actorId: req.user.id,
@@ -1257,9 +1471,9 @@ export async function changePassword(req, res) {
         actorName: req.user.name,
         action: 'USER_PASSWORD_CHANGED',
         resource: 'AUTH',
-        details: 'User established permanent credentials.',
+        details: 'User established permanent credentials and prior sessions were revoked.',
         ipAddress: req.ip || '127.0.0.1',
-        riskLevel: 'LOW',
+        riskLevel: 'MEDIUM',
       },
     });
 

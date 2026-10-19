@@ -19,16 +19,29 @@ import {
   getMyAssignments,
   uploadLessonMedia,
 } from '../controllers/moduleController.js';
-import { authenticateToken, requireRoles } from '../middleware/auth.js';
+import { authenticateToken, optionalAuthenticateToken, requireRoles } from '../middleware/auth.js';
 import { validateId } from '../middleware/validate.js';
+import { getUploadDir } from '../utils/storage.js';
 
 const protect = authenticateToken;
 
-// Ensure upload directory exists
-const uploadDir = path.resolve('uploads/lessons');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+// Ensure upload directory exists via storage abstraction
+const uploadDir = getUploadDir('lessons');
+
+const ALLOWED_MEDIA_EXTENSIONS = [
+  '.mp4', '.webm', '.ogg', '.mov', '.mkv',
+  '.pdf', '.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls',
+  '.png', '.jpg', '.jpeg', '.webp', '.gif',
+];
+
+const mediaFileFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname).toLowerCase();
+  const dangerous = ['.html', '.htm', '.svg', '.xml', '.js', '.jsx', '.ts', '.tsx', '.php', '.exe', '.sh', '.bat', '.cmd', '.vbs', '.py'];
+  if (dangerous.includes(ext) || !ALLOWED_MEDIA_EXTENSIONS.includes(ext)) {
+    return cb(new Error('INVALID_FILE_TYPE: File extension is not permitted for course resources.'));
+  }
+  cb(null, true);
+};
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -44,6 +57,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 1024 * 1024 * 1024 }, // 1GB
+  fileFilter: mediaFileFilter,
 });
 
 const router = express.Router();
@@ -59,9 +73,9 @@ router.post('/upload-media', protect, requireRoles('COURSE_CREATOR', 'ADMIN'), u
 // Enrolled courses for authenticated user (must be before /:id)
 router.get('/my-courses', protect, getMyAssignments);
 
-// Public Routes — Course Catalog
-router.get('/', listModules);
-router.get('/:id', getModule);
+// Public Routes — Course Catalog (with optional auth for permission filtering)
+router.get('/', optionalAuthenticateToken, listModules);
+router.get('/:id', optionalAuthenticateToken, getModule);
 
 // Authenticated Student Routes
 router.get('/:id/progress', protect, getModuleProgress);

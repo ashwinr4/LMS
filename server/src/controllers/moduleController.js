@@ -2,6 +2,7 @@ import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { cache } from '../utils/cache.js';
 import { io } from '../server.js';
+import { resolveMediaUrl } from '../utils/storage.js';
 
 // ============================================================
 // LIST MODULES (public, all)
@@ -9,21 +10,53 @@ import { io } from '../server.js';
 export async function listModules(req, res) {
   try {
     const { department, status = 'ACTIVE', type, search } = req.query;
-    const cacheKey = `modules:list:${department || ''}:${status || ''}:${type || ''}:${search || ''}`;
+
+    // Enforce publication visibility:
+    // Only ADMIN, MODERATOR, or COURSE_CREATOR can query non-ACTIVE courses.
+    // Anonymous visitors and standard students are strictly restricted to ACTIVE courses.
+    let targetStatus = 'ACTIVE';
+    const isPrivileged = req.user && (req.user.role === 'ADMIN' || req.user.role === 'MODERATOR');
+    const isCreator = req.user && req.user.role === 'COURSE_CREATOR';
+
+    if (status && status !== 'ACTIVE') {
+      if (isPrivileged || isCreator) {
+        targetStatus = status;
+      } else {
+        targetStatus = 'ACTIVE';
+      }
+    }
+
+    const callerScope = isPrivileged ? `priv:${req.user.id}` : (isCreator ? `creator:${req.user.id}` : 'public');
+    const cacheKey = `modules:list:${callerScope}:${department || ''}:${targetStatus || ''}:${type || ''}:${search || ''}`;
     const cached = cache.get(cacheKey);
     if (cached) {
       return res.status(200).json(cached);
     }
 
-    const where = { status };
+    const where = { status: targetStatus };
+
+    // If creator queries non-active courses (e.g. DRAFT), scope strictly to their own courses
+    if (isCreator && targetStatus !== 'ACTIVE') {
+      where.OR = [
+        { createdBy: req.user.id },
+        { instructorId: req.user.id },
+      ];
+    }
+
     if (department) where.department = department;
     if (type) where.type = type;
     if (search) {
-      where.OR = [
+      const searchConditions = [
         { title: { contains: search } },
         { code: { contains: search } },
         { description: { contains: search } },
       ];
+      if (where.OR) {
+        where.AND = [{ OR: where.OR }, { OR: searchConditions }];
+        delete where.OR;
+      } else {
+        where.OR = searchConditions;
+      }
     }
 
     const modules = await prisma.module.findMany({
@@ -76,7 +109,8 @@ export async function listModules(req, res) {
 export async function getModule(req, res) {
   try {
     const { id } = req.params;
-    const cacheKey = `modules:detail:${id}`;
+    const callerScope = req.user ? `${req.user.id}:${req.user.role}` : 'anon';
+    const cacheKey = `modules:detail:${id}:${callerScope}`;
     const cached = cache.get(cacheKey);
     if (cached) {
       return res.status(200).json(cached);
@@ -112,6 +146,42 @@ export async function getModule(req, res) {
 
     if (!module) {
       return res.status(404).json({ success: false, message: 'Module not found.' });
+    }
+
+    // Publication integrity: Non-active (DRAFT/ARCHIVED/DEPRECATED) modules are restricted
+    if (module.status !== 'ACTIVE') {
+      const isPrivileged = req.user && (req.user.role === 'ADMIN' || req.user.role === 'MODERATOR');
+      const isCreator = req.user && req.user.role === 'COURSE_CREATOR' && (module.createdBy === req.user.id || module.instructorId === req.user.id);
+
+      // Unapproved DRAFT courses are strictly restricted to Administrators, Moderators, and the authoring Creator.
+      // Ordinary enrolled students CANNOT access unapproved DRAFT courses.
+      if (module.status === 'DRAFT') {
+        if (!isPrivileged && !isCreator) {
+          return res.status(404).json({
+            success: false,
+            error: 'COURSE_NOT_PUBLISHED',
+            message: 'Course module not found or is currently not published.',
+          });
+        }
+      } else {
+        // ARCHIVED / DEPRECATED:
+        // Accessible by privileged users, the course creator, or actively enrolled students
+        let isEnrolled = false;
+        if (req.user && req.user.id) {
+          const assignment = await prisma.assignment.findUnique({
+            where: { userId_moduleId: { userId: req.user.id, moduleId: id } },
+          });
+          isEnrolled = assignment && assignment.status !== 'EXPIRED';
+        }
+
+        if (!isPrivileged && !isCreator && !isEnrolled) {
+          return res.status(404).json({
+            success: false,
+            error: 'COURSE_NOT_PUBLISHED',
+            message: 'Course module not found or is currently not published.',
+          });
+        }
+      }
     }
 
     const payload = {
@@ -214,13 +284,77 @@ export async function updateModule(req, res) {
       }
     }
 
+    // Strict field allowlist to prevent mass-assignment
+    const allowedFields = ['title', 'description', 'department', 'level', 'duration', 'type'];
+    const updateData = {};
+
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updateData[field] = req.body[field];
+      }
+    }
+
+    if (req.body.code !== undefined && req.body.code !== existing.code) {
+      const cleanCode = req.body.code.toUpperCase().trim();
+      const codeConflict = await prisma.module.findUnique({ where: { code: cleanCode } });
+      if (codeConflict && codeConflict.id !== id) {
+        return res.status(409).json({ success: false, message: `Module code ${cleanCode} is already in use.` });
+      }
+      updateData.code = cleanCode;
+    }
+
+    if (req.body.status !== undefined) {
+      if (req.user?.role === 'COURSE_CREATOR' && req.body.status === 'ACTIVE') {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_COURSE_ACTIVATION',
+          message: 'Course creators cannot activate or publish their own courses. Publication requires Administrator review and approval.',
+        });
+      }
+
+      const allowedStatuses = req.user?.role === 'ADMIN'
+        ? ['DRAFT', 'ACTIVE', 'ARCHIVED', 'DEPRECATED']
+        : ['DRAFT'];
+
+      if (!allowedStatuses.includes(req.body.status)) {
+        return res.status(403).json({
+          success: false,
+          error: 'FORBIDDEN_STATUS_TRANSITION',
+          message: `Invalid course status or unauthorized transition to "${req.body.status}". Allowed values: ${allowedStatuses.join(', ')}`,
+        });
+      }
+      updateData.status = req.body.status;
+    }
+
+    if (req.body.expiresMonths !== undefined) {
+      const months = parseInt(req.body.expiresMonths, 10);
+      if (!isNaN(months) && months > 0) {
+        updateData.expiresMonths = months;
+        updateData.expiresAt = new Date(Date.now() + months * 30 * 24 * 60 * 60 * 1000);
+      }
+    } else if (req.body.expiresAt !== undefined) {
+      const d = new Date(req.body.expiresAt);
+      if (!isNaN(d.getTime())) {
+        updateData.expiresAt = d;
+      }
+    }
+
+    if (outcomes !== undefined) {
+      updateData.outcomes = Array.isArray(outcomes) ? JSON.stringify(outcomes) : (typeof outcomes === 'string' ? outcomes : null);
+    }
+    if (prerequisites !== undefined) {
+      updateData.prerequisites = Array.isArray(prerequisites) ? JSON.stringify(prerequisites) : (typeof prerequisites === 'string' ? prerequisites : null);
+    }
+
+    // Only administrators may reassign instructor ownership
+    if (req.user?.role === 'ADMIN') {
+      if (req.body.instructorId !== undefined) updateData.instructorId = req.body.instructorId;
+      if (req.body.instructorName !== undefined) updateData.instructorName = req.body.instructorName;
+    }
+
     const module = await prisma.module.update({
       where: { id },
-      data: {
-        ...rest,
-        outcomes: outcomes ? JSON.stringify(outcomes) : undefined,
-        prerequisites: prerequisites ? JSON.stringify(prerequisites) : undefined,
-      },
+      data: updateData,
     });
 
     cache.invalidatePrefix('modules:');
@@ -570,6 +704,22 @@ export async function completeLesson(req, res) {
       return res.status(404).json({ success: false, message: 'No active assignment found for this module.' });
     }
 
+    if (assignment.status === 'EXPIRED') {
+      return res.status(403).json({
+        success: false,
+        error: 'ASSIGNMENT_EXPIRED',
+        message: 'Your enrollment assignment for this course has expired. You cannot submit lesson progress.',
+      });
+    }
+
+    if (assignment.module && assignment.module.status !== 'ACTIVE') {
+      return res.status(403).json({
+        success: false,
+        error: 'COURSE_INACTIVE',
+        message: 'Cannot record progress for a course that is not currently active.',
+      });
+    }
+
     // Existing completed lessons set
     let completedLessons = assignment.completedLessons
       ? JSON.parse(assignment.completedLessons)
@@ -664,10 +814,23 @@ export async function getModuleProgress(req, res) {
 
     const assignment = await prisma.assignment.findUnique({
       where: { userId_moduleId: { userId, moduleId } },
+      include: { module: { select: { status: true, createdBy: true, instructorId: true } } },
     });
 
     if (!assignment) {
       return res.status(200).json({ success: true, enrolled: false, progress: 0, completedLessons: [] });
+    }
+
+    if (assignment.module?.status === 'DRAFT') {
+      const isPrivileged = req.user && (req.user.role === 'ADMIN' || req.user.role === 'MODERATOR');
+      const isCreator = req.user && (assignment.module.createdBy === req.user.id || assignment.module.instructorId === req.user.id);
+      if (!isPrivileged && !isCreator) {
+        return res.status(404).json({
+          success: false,
+          error: 'COURSE_NOT_PUBLISHED',
+          message: 'Course module not found or is currently not published.',
+        });
+      }
     }
 
     let lastActive = null;
@@ -716,9 +879,18 @@ export async function getMyAssignments(req, res) {
       orderBy: { createdAt: 'desc' },
     });
 
+    const isPrivileged = req.user && (req.user.role === 'ADMIN' || req.user.role === 'MODERATOR');
+    const filteredAssignments = assignments.filter((a) => {
+      if (!a.module) return false;
+      if (a.module.status === 'DRAFT') {
+        return isPrivileged || a.module.createdBy === req.user.id || a.module.instructorId === req.user.id;
+      }
+      return true;
+    });
+
     return res.status(200).json({
       success: true,
-      assignments: assignments.map((a) => {
+      assignments: filteredAssignments.map((a) => {
         const totalLessons = (a.module?.sections || []).reduce((sum, sec) => sum + (sec.lessons?.length || 0), 0);
         const completedLessons = a.completedLessons ? JSON.parse(a.completedLessons) : [];
         let lastActive = null;
@@ -760,10 +932,12 @@ export async function uploadLessonMedia(req, res) {
       return res.status(400).json({ success: false, message: 'No file received for lecture upload.' });
     }
     const relativeUrl = `/uploads/lessons/${req.file.filename}`;
-    logger.info(`Lecture file uploaded successfully: ${req.file.originalname} -> ${relativeUrl} (${(req.file.size / (1024 * 1024)).toFixed(2)} MB)`);
+    const resolvedUrl = resolveMediaUrl(relativeUrl, req);
+    logger.info(`Lecture file uploaded successfully: ${req.file.originalname} -> ${resolvedUrl} (${(req.file.size / (1024 * 1024)).toFixed(2)} MB)`);
     return res.status(200).json({
       success: true,
-      fileUrl: relativeUrl,
+      fileUrl: resolvedUrl,
+      relativeUrl,
       filename: req.file.filename,
       originalName: req.file.originalname,
       size: req.file.size,

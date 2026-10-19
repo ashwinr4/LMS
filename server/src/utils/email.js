@@ -5,10 +5,18 @@ let transporter = null;
 
 function getTransporter() {
   if (!transporter) {
-    const host = process.env.SMTP_HOST || 'smtp.gmail.com';
-    const port = parseInt(process.env.SMTP_PORT, 10) || 587;
-    const user = process.env.SMTP_USER || 'thefallenx8@gmail.com';
-    const pass = process.env.SMTP_PASS || 'diwdwcoaktrtozcl';
+    let host = process.env.SMTP_HOST || 'smtp.gmail.com';
+    let port = parseInt(process.env.SMTP_PORT, 10) || 587;
+    let user = process.env.SMTP_USER;
+    let pass = process.env.SMTP_PASS;
+
+    // Resend API Key compatibility for cloud deployments
+    if (!user && process.env.RESEND_API_KEY) {
+      host = process.env.SMTP_HOST || 'smtp.resend.com';
+      port = parseInt(process.env.SMTP_PORT, 10) || 465;
+      user = 'resend';
+      pass = process.env.RESEND_API_KEY;
+    }
 
     if (user && pass) {
       transporter = nodemailer.createTransport({
@@ -20,23 +28,53 @@ function getTransporter() {
         maxConnections: 5,
         maxMessages: 100,
       });
-      logger.info(`Live Email Transporter initialized with ${host}:${port} (${user})`);
+      logger.info(`Live Email Transporter initialized with ${host}:${port} (User: ${user})`);
     } else {
-      logger.warn('SMTP Credentials not fully configured. Email fallback active.');
+      if (process.env.NODE_ENV === 'production') {
+        logger.warn('SMTP credentials not configured in production environment. Live email dispatch is disabled.');
+      } else {
+        logger.info('SMTP credentials not configured. Development simulated email mode active.');
+      }
     }
   }
   return transporter;
 }
 
+export function isEmailConfigured() {
+  return Boolean(
+    (process.env.SMTP_USER && process.env.SMTP_PASS) ||
+    process.env.RESEND_API_KEY
+  );
+}
+
 export async function sendEmail({ to, subject, html, text }) {
   try {
     const mailer = getTransporter();
-    const smtpUser = process.env.SMTP_USER || 'thefallenx8@gmail.com';
-    const fromAddress = `"Qualiva Security" <${smtpUser}>`;
+    const smtpUser = process.env.SMTP_USER || 'noreply@qualiva.local';
+    const fromAddress = process.env.SMTP_FROM || process.env.FROM_EMAIL
+      ? `"Qualiva Security" <${process.env.SMTP_FROM || process.env.FROM_EMAIL}>`
+      : `"Qualiva Security" <${smtpUser}>`;
 
     if (!mailer) {
-      logger.info(`[MOCK EMAIL DISPATCH] To: ${to} | Subject: ${subject}`);
-      return { success: true, simulated: true };
+      if (process.env.NODE_ENV === 'production') {
+        logger.warn(`[EMAIL NOT CONFIGURED] Message delivery skipped for: ${to} | Subject: ${subject}`);
+        return {
+          success: false,
+          delivered: false,
+          simulated: false,
+          error: 'EMAIL_NOT_CONFIGURED',
+          message: 'Email service is not configured on this server.',
+        };
+      }
+
+      logger.info(`[SIMULATED EMAIL DISPATCH - DEV ONLY] To: ${to} | Subject: ${subject}`);
+      return {
+        success: false,
+        delivered: false,
+        simulated: true,
+        error: 'EMAIL_SIMULATED_DEV_ONLY',
+        message: 'Email delivery was simulated in development mode (SMTP credentials not configured).',
+      };
     }
 
     const plainText = text || html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -50,17 +88,31 @@ export async function sendEmail({ to, subject, html, text }) {
     });
 
     logger.info(`Live Email Dispatched successfully: MessageId=${info.messageId} to ${to}`);
-    return { success: true, messageId: info.messageId };
+    return {
+      success: true,
+      delivered: true,
+      simulated: false,
+      messageId: info.messageId,
+      message: 'Email successfully delivered.',
+    };
   } catch (error) {
     logger.error(`Failed to dispatch email to ${to}: ${error.message}`);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      delivered: false,
+      simulated: false,
+      error: error.message,
+      message: 'Failed to deliver email through SMTP transport.',
+    };
   }
 }
 
 export async function sendOtpEmail(toEmail, otpCode, userName = 'Qualiva Member', context = 'Sign In') {
   const timeString = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
   const subject = `[Qualiva Code: ${otpCode}] Your Verification Passcode (${timeString})`;
-  logger.info(`🔑 [2FA OTP GENERATED] Passcode for ${toEmail}: ${otpCode}`);
+  if (process.env.NODE_ENV !== 'production') {
+    logger.info(`🔑 [DEV 2FA OTP] Passcode for ${toEmail}: ${otpCode}`);
+  }
   const text = `Hello ${userName},\n\nYour Qualiva verification code is: ${otpCode}\n\nThis code will expire in 10 minutes. If you did not initiate this request, you can safely ignore this email.\n\nQualiva Enterprise Platform`;
   
   const html = `

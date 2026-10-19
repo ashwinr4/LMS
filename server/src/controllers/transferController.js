@@ -1,4 +1,4 @@
-import { prisma } from '../utils/prisma.js';
+import { prisma, getActiveEngine } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { io } from '../server.js';
 import { cache } from '../utils/cache.js';
@@ -177,7 +177,33 @@ export async function createTransfer(req, res) {
       if (c) courseTitle = c.title;
     }
     let targetTitle = null;
-    if (targetCourseId) {
+    if (type === 'COURSE_TRANSFER') {
+      if (!targetCourseId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Target course is mandatory for course transfer.',
+        });
+      }
+      const tc = await prisma.module.findUnique({
+        where: { id: targetCourseId },
+        select: { id: true, title: true, status: true, expiresAt: true },
+      });
+      if (!tc || tc.status !== 'ACTIVE') {
+        return res.status(400).json({
+          success: false,
+          error: 'COURSE_NOT_ACTIVE',
+          message: 'Target course for transfer is not active or available.',
+        });
+      }
+      if (tc.expiresAt && new Date(tc.expiresAt).getTime() < Date.now()) {
+        return res.status(400).json({
+          success: false,
+          error: 'COURSE_EXPIRED',
+          message: 'Target course has expired and is no longer available for transfer.',
+        });
+      }
+      targetTitle = tc.title;
+    } else if (targetCourseId) {
       const tc = await prisma.module.findUnique({ where: { id: targetCourseId }, select: { title: true } });
       if (tc) targetTitle = tc.title;
     }
@@ -254,6 +280,16 @@ export async function approveTransfer(req, res) {
     const { id } = req.params;
     const { notes } = req.body || {};
 
+    // Guard against partial data corruption on engines lacking atomic multi-record rollback
+    if (getActiveEngine() === 'mongodb') {
+      return res.status(409).json({
+        success: false,
+        error: 'TRANSACTION_NOT_SUPPORTED',
+        message:
+          'Transfer approval requires multi-record atomic rollback, which is not supported by the active MongoDB provider. To prevent partial state corruption, transfer approvals are blocked on MongoDB. Switch the primary engine to PostgreSQL to execute this operation safely.',
+      });
+    }
+
     const existing = await prisma.transferRequest.findUnique({
       where: { id },
       include: { user: true },
@@ -273,59 +309,222 @@ export async function approveTransfer(req, res) {
       });
     }
 
-    // Process type-specific logic
+    let updated;
+
+    // Process type-specific logic atomically
     if (existing.type === 'SLA_EXTENSION' && (existing.courseId || existing.currentCourseId) && existing.requestedDays) {
       const targetCourseId = existing.courseId || existing.currentCourseId;
       const targetUserId = existing.userId || existing.studentId;
-      const assignment = await prisma.assignment.findFirst({
-        where: {
-          userId: targetUserId,
-          moduleId: targetCourseId,
-        },
+
+      updated = await prisma.$transaction(async (tx) => {
+        const assignment = await tx.assignment.findFirst({
+          where: {
+            userId: targetUserId,
+            moduleId: targetCourseId,
+          },
+        });
+
+        if (assignment) {
+          const currentDeadline = assignment.dueDate ? new Date(assignment.dueDate) : new Date();
+          currentDeadline.setDate(currentDeadline.getDate() + Number(existing.requestedDays));
+          await tx.assignment.update({
+            where: { id: assignment.id },
+            data: { dueDate: currentDeadline },
+          });
+        }
+
+        return await tx.transferRequest.update({
+          where: { id },
+          data: {
+            status: 'APPROVED',
+            reviewedById: req.user.id,
+            reviewedAt: new Date(),
+            reason: notes ? `${existing.reason}\n\n[Approval Note]: ${notes}` : existing.reason,
+          },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+                role: true,
+                department: true,
+              },
+            },
+            course: { select: { id: true, title: true } },
+            targetCourse: { select: { id: true, title: true } },
+            reviewedBy: { select: { id: true, name: true, email: true } },
+          },
+        });
+      });
+    } else if (existing.type === 'COURSE_TRANSFER') {
+      const studentId = existing.studentId || existing.userId;
+      const targetCourseId = existing.targetCourseId;
+      const sourceCourseId = existing.currentCourseId || existing.courseId;
+
+      if (!targetCourseId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Transfer request is missing target course specification.',
+        });
+      }
+
+      // Verify target module exists and is active
+      const targetModule = await prisma.module.findUnique({
+        where: { id: targetCourseId },
+      });
+      if (!targetModule || targetModule.status !== 'ACTIVE') {
+        return res.status(400).json({
+          success: false,
+          error: 'COURSE_NOT_ACTIVE',
+          message: 'Target course for transfer does not exist, is inactive, or has been removed.',
+        });
+      }
+      if (targetModule.expiresAt && new Date(targetModule.expiresAt).getTime() < Date.now()) {
+        return res.status(400).json({
+          success: false,
+          error: 'COURSE_EXPIRED',
+          message: 'Target course has expired and cannot accept transfers.',
+        });
+      }
+
+      const days = Number(existing.requestedDays) || 30;
+      const targetDueDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
+      updated = await prisma.$transaction(async (tx) => {
+        // 1. If student has an existing assignment in the source course, expire it
+        if (sourceCourseId && sourceCourseId !== targetCourseId) {
+          const sourceAssignment = await tx.assignment.findUnique({
+            where: {
+              userId_moduleId: {
+                userId: studentId,
+                moduleId: sourceCourseId,
+              },
+            },
+          });
+          if (sourceAssignment) {
+            await tx.assignment.update({
+              where: { id: sourceAssignment.id },
+              data: {
+                status: 'EXPIRED',
+                submissionNotes: `Transferred to course track [${targetModule.code || targetCourseId}] by Admin ${req.user.name || req.user.email}.`,
+              },
+            });
+          }
+        }
+
+        // 2. Provision or reactivate target course assignment
+        await tx.assignment.upsert({
+          where: {
+            userId_moduleId: {
+              userId: studentId,
+              moduleId: targetCourseId,
+            },
+          },
+          update: {
+            assignedBy: req.user.id,
+            dueDate: targetDueDate,
+            status: 'IN_PROGRESS',
+          },
+          create: {
+            userId: studentId,
+            moduleId: targetCourseId,
+            assignedBy: req.user.id,
+            dueDate: targetDueDate,
+            progress: 0,
+            status: 'IN_PROGRESS',
+            completedLessons: '[]',
+          },
+        });
+
+        // 3. Mark transfer request as APPROVED
+        return await tx.transferRequest.update({
+          where: { id },
+          data: {
+            status: 'APPROVED',
+            reviewedById: req.user.id,
+            reviewedAt: new Date(),
+            reason: notes ? `${existing.reason}\n\n[Approval Note]: ${notes}` : existing.reason,
+          },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+                role: true,
+                department: true,
+              },
+            },
+            course: { select: { id: true, title: true } },
+            targetCourse: { select: { id: true, title: true } },
+            reviewedBy: { select: { id: true, name: true, email: true } },
+          },
+        });
       });
 
-      if (assignment) {
-        const currentDeadline = assignment.dueDate ? new Date(assignment.dueDate) : new Date();
-        currentDeadline.setDate(currentDeadline.getDate() + Number(existing.requestedDays));
-        await prisma.assignment.update({
-          where: { id: assignment.id },
-          data: { dueDate: currentDeadline },
-        });
-      }
+      cache.invalidatePrefix('modules:');
     } else if (existing.type === 'DEPARTMENT_TRANSFER' && existing.toDepartment) {
-      // Only staff roles have departments
-      if (existing.user && existing.user.role !== 'USER') {
-        await prisma.user.update({
-          where: { id: existing.userId },
-          data: { department: existing.toDepartment },
-        });
-      }
-    }
-
-    const updated = await prisma.transferRequest.update({
-      where: { id },
-      data: {
-        status: 'APPROVED',
-        reviewedById: req.user.id,
-        reviewedAt: new Date(),
-        reason: notes ? `${existing.reason}\n\n[Approval Note]: ${notes}` : existing.reason,
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            avatar: true,
-            role: true,
-            department: true,
+      updated = await prisma.$transaction(async (tx) => {
+        if (existing.user && existing.user.role !== 'USER') {
+          await tx.user.update({
+            where: { id: existing.userId },
+            data: { department: existing.toDepartment },
+          });
+        }
+        return await tx.transferRequest.update({
+          where: { id },
+          data: {
+            status: 'APPROVED',
+            reviewedById: req.user.id,
+            reviewedAt: new Date(),
+            reason: notes ? `${existing.reason}\n\n[Approval Note]: ${notes}` : existing.reason,
           },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatar: true,
+                role: true,
+                department: true,
+              },
+            },
+            course: { select: { id: true, title: true } },
+            targetCourse: { select: { id: true, title: true } },
+            reviewedBy: { select: { id: true, name: true, email: true } },
+          },
+        });
+      });
+    } else {
+      updated = await prisma.transferRequest.update({
+        where: { id },
+        data: {
+          status: 'APPROVED',
+          reviewedById: req.user.id,
+          reviewedAt: new Date(),
+          reason: notes ? `${existing.reason}\n\n[Approval Note]: ${notes}` : existing.reason,
         },
-        course: { select: { id: true, title: true } },
-        targetCourse: { select: { id: true, title: true } },
-        reviewedBy: { select: { id: true, name: true, email: true } },
-      },
-    });
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatar: true,
+              role: true,
+              department: true,
+            },
+          },
+          course: { select: { id: true, title: true } },
+          targetCourse: { select: { id: true, title: true } },
+          reviewedBy: { select: { id: true, name: true, email: true } },
+        },
+      });
+    }
 
     // Create notification for requester
     const recipientId = existing.studentId || existing.userId;
@@ -371,6 +570,13 @@ export async function approveTransfer(req, res) {
       transfer: updated,
     });
   } catch (error) {
+    if (error.code === 'TRANSACTION_UNSUPPORTED' || error.message?.includes('TRANSACTION_UNSUPPORTED')) {
+      return res.status(409).json({
+        success: false,
+        error: 'TRANSACTION_NOT_SUPPORTED',
+        message: error.message,
+      });
+    }
     logger.error('Error in approveTransfer:', error);
     return res.status(500).json({
       success: false,

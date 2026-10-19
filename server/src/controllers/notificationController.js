@@ -21,23 +21,31 @@ export async function getNotifications(req, res) {
       ],
     };
 
-    const [notifications, unreadCount] = await Promise.all([
-      prisma.notification.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        take: limit,
-      }),
-      prisma.notification.count({
-        where: {
-          ...where,
-          isRead: false,
-        },
-      }),
-    ]);
+    const notifications = await prisma.notification.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    // Map user-specific read status for broadcast notifications
+    const normalized = notifications.map((n) => {
+      let isRead = n.isRead;
+      if (n.targetRole && !n.recipientId) {
+        try {
+          const meta = n.metadata ? (typeof n.metadata === 'string' ? JSON.parse(n.metadata) : n.metadata) : {};
+          isRead = Array.isArray(meta.readBy) ? meta.readBy.includes(userId) : n.isRead;
+        } catch {
+          isRead = n.isRead;
+        }
+      }
+      return { ...n, isRead };
+    });
+
+    const unreadCount = normalized.filter((n) => !n.isRead).length;
 
     return res.status(200).json({
       success: true,
-      notifications,
+      notifications: normalized,
       unreadCount,
     });
   } catch (error) {
@@ -74,10 +82,31 @@ export async function markAsRead(req, res) {
       return res.status(403).json({ success: false, message: 'Unauthorized.' });
     }
 
-    const updated = await prisma.notification.update({
-      where: { id },
-      data: { isRead: true },
-    });
+    let updated;
+    if (notification.targetRole && !notification.recipientId) {
+      // Role broadcast: persist read status per user in metadata
+      let meta = {};
+      try {
+        meta = notification.metadata ? (typeof notification.metadata === 'string' ? JSON.parse(notification.metadata) : notification.metadata) : {};
+      } catch {
+        meta = {};
+      }
+      const readBy = Array.isArray(meta.readBy) ? [...meta.readBy] : [];
+      if (!readBy.includes(userId)) {
+        readBy.push(userId);
+      }
+      meta.readBy = readBy;
+      updated = await prisma.notification.update({
+        where: { id },
+        data: { metadata: JSON.stringify(meta) },
+      });
+      updated = { ...updated, isRead: true };
+    } else {
+      updated = await prisma.notification.update({
+        where: { id },
+        data: { isRead: true },
+      });
+    }
 
     if (io) {
       io.to(`user_${userId}`).emit('notifications_read', { id, isRead: true });
@@ -102,18 +131,46 @@ export async function markAllAsRead(req, res) {
     const userId = req.user.id;
     const userRole = req.user.role;
 
+    // 1. Mark personal direct notifications
     await prisma.notification.updateMany({
       where: {
         type: { notIn: ['ANNOUNCEMENT', 'COMMUNITY_SUPPORT', 'DIRECT_MESSAGE', 'LAST_ANNOUNCEMENT_READ'] },
-        OR: [
-          { recipientId: userId },
-          { targetRole: userRole },
-          { targetRole: 'ALL' },
-        ],
+        recipientId: userId,
         isRead: false,
       },
       data: { isRead: true },
     });
+
+    // 2. Mark role broadcast notifications for this user
+    const broadcastNotifs = await prisma.notification.findMany({
+      where: {
+        type: { notIn: ['ANNOUNCEMENT', 'COMMUNITY_SUPPORT', 'DIRECT_MESSAGE', 'LAST_ANNOUNCEMENT_READ'] },
+        recipientId: null,
+        OR: [
+          { targetRole: userRole },
+          { targetRole: 'ALL' },
+        ],
+      },
+      take: 50,
+    });
+
+    for (const bn of broadcastNotifs) {
+      let meta = {};
+      try {
+        meta = bn.metadata ? (typeof bn.metadata === 'string' ? JSON.parse(bn.metadata) : bn.metadata) : {};
+      } catch {
+        meta = {};
+      }
+      const readBy = Array.isArray(meta.readBy) ? [...meta.readBy] : [];
+      if (!readBy.includes(userId)) {
+        readBy.push(userId);
+        meta.readBy = readBy;
+        await prisma.notification.update({
+          where: { id: bn.id },
+          data: { metadata: JSON.stringify(meta) },
+        });
+      }
+    }
 
     if (io) {
       io.to(`user_${userId}`).emit('notifications_read', { all: true });

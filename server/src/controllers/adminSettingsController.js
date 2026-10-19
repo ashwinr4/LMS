@@ -72,16 +72,16 @@ export async function getDatabaseSettings(req, res) {
         secondary: activeBackupEngine,
       },
       urls: {
-        postgresql: postgresUrl,
-        mongodb: mongoUrl,
-        mysql: process.env.MYSQL_URL || '',
+        postgresql: maskDbUrl(postgresUrl),
+        mongodb: maskDbUrl(mongoUrl),
+        mysql: maskDbUrl(process.env.MYSQL_URL || ''),
         sqlite: process.env.SQLITE_URL || 'file:./prisma/lms_primary.db',
-        sqlserver: process.env.SQLSERVER_URL || '',
+        sqlserver: maskDbUrl(process.env.SQLSERVER_URL || ''),
       },
       settings: {
         primary: {
           url: maskDbUrl(primaryUrl),
-          rawUrl: primaryUrl,
+          rawUrl: maskDbUrl(primaryUrl),
           engine: activePrimaryEngine,
           engineLabel: getEngineLabel(activePrimaryEngine),
           status: primaryStatus,
@@ -91,7 +91,7 @@ export async function getDatabaseSettings(req, res) {
         },
         secondary: {
           url: maskDbUrl(backupUrl),
-          rawUrl: backupUrl,
+          rawUrl: maskDbUrl(backupUrl),
           engine: activeBackupEngine,
           engineLabel: getEngineLabel(activeBackupEngine),
           status: secondaryStatus,
@@ -114,9 +114,9 @@ export async function getDatabaseSettings(req, res) {
   }
 }
 
-// 2. TEST DATABASE CONNECTION (Admin Only - Multi-Engine)
+// 2. TEST DATABASE CONNECTION (Admin Only - Multi-Engine with SSRF Protection)
 export async function testDatabaseConnection(req, res) {
-  const { url } = req.body;
+  let { url } = req.body;
 
   if (!url || typeof url !== 'string' || !url.trim()) {
     return res.status(400).json({
@@ -125,8 +125,64 @@ export async function testDatabaseConnection(req, res) {
     });
   }
 
+  url = url.trim();
+
+  // If the admin submitted the masked URL from the UI, resolve it to the active system database URL
+  const primaryUrl = process.env.DATABASE_URL || '';
+  const backupUrl = process.env.BACKUP_DB_URL || '';
+  if (url.includes('••••••••') || url === 'CURRENT_PRIMARY' || url === maskDbUrl(primaryUrl)) {
+    url = primaryUrl;
+  } else if (url === 'CURRENT_BACKUP' || url === maskDbUrl(backupUrl)) {
+    url = backupUrl;
+  }
+
+  // SSRF Security Shield: Validate destination host
+  if (!url.startsWith('file:') && !url.startsWith('sqlite:')) {
+    try {
+      // Normalise mongodb+srv / postgres protocols for standard URL parsing
+      const testableUrl = url.replace(/^[a-zA-Z0-9+_]+:\/\//, 'http://');
+      const parsed = new URL(testableUrl);
+      const hostname = parsed.hostname.toLowerCase();
+      const port = parsed.port ? parseInt(parsed.port, 10) : null;
+
+      // Disallow cloud instance metadata endpoints (AWS, GCP, Azure, Alibaba)
+      const forbiddenHosts = [
+        '169.254.169.254',
+        'metadata.google.internal',
+        'metadata',
+        'instance-data',
+        '100.100.100.200',
+      ];
+      if (forbiddenHosts.includes(hostname)) {
+        logger.warn(`SSRF Blocked: Attempt to probe cloud metadata endpoint (${hostname})`);
+        return res.status(400).json({
+          success: false,
+          message: 'Security Policy Violation: Access to cloud instance metadata endpoints is prohibited.',
+        });
+      }
+
+      // Check loopback ports: only allow standard database ports if pointing to loopback
+      const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+      if (isLoopback) {
+        const allowedDbPorts = [5432, 27017, 3306, 1433];
+        if (port && !allowedDbPorts.includes(port)) {
+          logger.warn(`SSRF Blocked: Attempt to probe non-database local port on loopback (${port})`);
+          return res.status(400).json({
+            success: false,
+            message: `Security Policy Violation: Loopback connections restricted to authorized database ports (${allowedDbPorts.join(', ')}).`,
+          });
+        }
+      }
+    } catch (parseErr) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid database connection string format.',
+      });
+    }
+  }
+
   try {
-    const result = await testConnection(url.trim());
+    const result = await testConnection(url);
     return res.status(200).json(result);
   } catch (error) {
     logger.warn(`Test DB Connection Diagnostic: ${error.message}`);
@@ -166,42 +222,62 @@ export async function updateDatabaseSettings(req, res) {
     const primaryEngine = detectEngine(trimmedPrimary);
     const backupEngine = detectEngine(trimmedBackup);
 
+    const SUPPORTED_ENGINES = ['postgresql', 'mongodb'];
+    if (!SUPPORTED_ENGINES.includes(primaryEngine)) {
+      return res.status(400).json({
+        success: false,
+        error: 'UNSUPPORTED_DATABASE_PROVIDER',
+        message: `Database provider "${primaryEngine.toUpperCase()}" is not supported for active runtime operations. Only PostgreSQL and MongoDB Atlas are currently supported.`,
+      });
+    }
+    if (!SUPPORTED_ENGINES.includes(backupEngine)) {
+      return res.status(400).json({
+        success: false,
+        error: 'UNSUPPORTED_DATABASE_PROVIDER',
+        message: `Backup database provider "${backupEngine.toUpperCase()}" is not supported for active runtime operations. Only PostgreSQL and MongoDB Atlas are currently supported.`,
+      });
+    }
+
     // Runtime hot-swap active engine proxy
     switchActiveEngine(primaryEngine, trimmedPrimary);
 
-    // Persist to server/.env file
-    const envPath = path.resolve('.env');
-    if (fs.existsSync(envPath)) {
-      let envContent = fs.readFileSync(envPath, 'utf8');
+    // Persist to server/.env file safely without crashing in read-only container environments
+    try {
+      const envPath = path.resolve('.env');
+      if (fs.existsSync(envPath)) {
+        let envContent = fs.readFileSync(envPath, 'utf8');
 
-      function upsertEnvKey(key, value) {
-        const regex = new RegExp(`^${key}=.*`, 'm');
-        if (regex.test(envContent)) {
-          envContent = envContent.replace(regex, `${key}=${value}`);
-        } else {
-          envContent += `\n${key}=${value}`;
+        function upsertEnvKey(key, value) {
+          const regex = new RegExp(`^${key}=.*`, 'm');
+          if (regex.test(envContent)) {
+            envContent = envContent.replace(regex, `${key}=${value}`);
+          } else {
+            envContent += `\n${key}=${value}`;
+          }
         }
+
+        upsertEnvKey('ACTIVE_PRIMARY_ENGINE', primaryEngine);
+        upsertEnvKey('ACTIVE_BACKUP_ENGINE', backupEngine);
+        upsertEnvKey('DATABASE_URL', trimmedPrimary);
+        upsertEnvKey('BACKUP_DB_URL', trimmedBackup);
+
+        if (primaryEngine === 'postgresql') {
+          upsertEnvKey('POSTGRES_URL', trimmedPrimary);
+        } else if (primaryEngine === 'mongodb') {
+          upsertEnvKey('MONGODB_URL', trimmedPrimary);
+        }
+
+        if (backupEngine === 'postgresql') {
+          upsertEnvKey('POSTGRES_URL', trimmedBackup);
+        } else if (backupEngine === 'mongodb') {
+          upsertEnvKey('MONGODB_URL', trimmedBackup);
+        }
+
+        fs.writeFileSync(envPath, envContent, 'utf8');
+        logger.info(`Updated database connection strings and active engines in .env file.`);
       }
-
-      upsertEnvKey('ACTIVE_PRIMARY_ENGINE', primaryEngine);
-      upsertEnvKey('ACTIVE_BACKUP_ENGINE', backupEngine);
-      upsertEnvKey('DATABASE_URL', trimmedPrimary);
-      upsertEnvKey('BACKUP_DB_URL', trimmedBackup);
-
-      if (primaryEngine === 'postgresql') {
-        upsertEnvKey('POSTGRES_URL', trimmedPrimary);
-      } else if (primaryEngine === 'mongodb') {
-        upsertEnvKey('MONGODB_URL', trimmedPrimary);
-      }
-
-      if (backupEngine === 'postgresql') {
-        upsertEnvKey('POSTGRES_URL', trimmedBackup);
-      } else if (backupEngine === 'mongodb') {
-        upsertEnvKey('MONGODB_URL', trimmedBackup);
-      }
-
-      fs.writeFileSync(envPath, envContent, 'utf8');
-      logger.info(`Updated database connection strings and active engines in .env file.`);
+    } catch (fileErr) {
+      logger.warn(`Notice: Could not write database configuration to .env file (${fileErr.message}). In-memory runtime hot-swap remains active.`);
     }
 
     // Update in-memory
@@ -238,14 +314,14 @@ export async function updateDatabaseSettings(req, res) {
       settings: {
         primary: {
           url: maskDbUrl(trimmedPrimary),
-          rawUrl: trimmedPrimary,
+          rawUrl: maskDbUrl(trimmedPrimary),
           engine: primaryEngine,
           engineLabel: getEngineLabel(primaryEngine),
           status: 'ONLINE',
         },
         secondary: {
           url: maskDbUrl(trimmedBackup),
-          rawUrl: trimmedBackup,
+          rawUrl: maskDbUrl(trimmedBackup),
           engine: backupEngine,
           engineLabel: getEngineLabel(backupEngine),
           status: trimmedPrimary === trimmedBackup ? 'SYNCHRONIZED_CLUSTER' : 'ONLINE',
@@ -275,6 +351,15 @@ export async function migrateAndActivateDatabase(req, res) {
 
     const trimmedTarget = targetUrl.trim();
     const targetEngine = detectEngine(trimmedTarget);
+
+    const SUPPORTED_ENGINES = ['postgresql', 'mongodb'];
+    if (!SUPPORTED_ENGINES.includes(targetEngine)) {
+      return res.status(400).json({
+        success: false,
+        error: 'UNSUPPORTED_DATABASE_PROVIDER',
+        message: `Database provider "${targetEngine.toUpperCase()}" is not supported for active runtime operations. Only PostgreSQL and MongoDB Atlas are currently supported.`,
+      });
+    }
 
     // 1. Pre-flight verification
     let testResult;
@@ -317,36 +402,40 @@ export async function migrateAndActivateDatabase(req, res) {
       process.env.POSTGRES_URL = trimmedTarget;
     }
 
-    // 4. Persist to server/.env file
-    const envPath = path.resolve('.env');
-    if (fs.existsSync(envPath)) {
-      let envContent = fs.readFileSync(envPath, 'utf8');
+    // 4. Persist to server/.env file safely without crashing in read-only container environments
+    try {
+      const envPath = path.resolve('.env');
+      if (fs.existsSync(envPath)) {
+        let envContent = fs.readFileSync(envPath, 'utf8');
 
-      function upsertEnvKey(key, value) {
-        const regex = new RegExp(`^${key}=.*`, 'm');
-        if (regex.test(envContent)) {
-          envContent = envContent.replace(regex, `${key}=${value}`);
-        } else {
-          envContent += `\n${key}=${value}`;
+        function upsertEnvKey(key, value) {
+          const regex = new RegExp(`^${key}=.*`, 'm');
+          if (regex.test(envContent)) {
+            envContent = envContent.replace(regex, `${key}=${value}`);
+          } else {
+            envContent += `\n${key}=${value}`;
+          }
         }
-      }
 
-      if (role === 'PRIMARY') {
-        upsertEnvKey('ACTIVE_PRIMARY_ENGINE', targetEngine);
-        upsertEnvKey('DATABASE_URL', trimmedTarget);
-      } else {
-        upsertEnvKey('ACTIVE_BACKUP_ENGINE', targetEngine);
-        upsertEnvKey('BACKUP_DB_URL', trimmedTarget);
-      }
+        if (role === 'PRIMARY') {
+          upsertEnvKey('ACTIVE_PRIMARY_ENGINE', targetEngine);
+          upsertEnvKey('DATABASE_URL', trimmedTarget);
+        } else {
+          upsertEnvKey('ACTIVE_BACKUP_ENGINE', targetEngine);
+          upsertEnvKey('BACKUP_DB_URL', trimmedTarget);
+        }
 
-      if (targetEngine === 'mongodb') {
-        upsertEnvKey('MONGODB_URL', trimmedTarget);
-      } else if (targetEngine === 'postgresql') {
-        upsertEnvKey('POSTGRES_URL', trimmedTarget);
-      }
+        if (targetEngine === 'mongodb') {
+          upsertEnvKey('MONGODB_URL', trimmedTarget);
+        } else if (targetEngine === 'postgresql') {
+          upsertEnvKey('POSTGRES_URL', trimmedTarget);
+        }
 
-      fs.writeFileSync(envPath, envContent, 'utf8');
-      logger.info(`Persisted updated ${role} database (${targetEngine}) in .env file.`);
+        fs.writeFileSync(envPath, envContent, 'utf8');
+        logger.info(`Persisted updated ${role} database (${targetEngine}) in .env file.`);
+      }
+    } catch (fileErr) {
+      logger.warn(`Notice: Could not write updated ${role} database configuration to .env file (${fileErr.message}). In-memory runtime hot-swap remains active.`);
     }
 
     cache.delete('admin:database_settings');

@@ -6,6 +6,7 @@ import { useSocket } from '../../context/SocketContext.jsx';
 import { StatusBadge } from '../../components/ui/StatusBadge.jsx';
 import { Button } from '../../components/ui/Button.jsx';
 import { cn } from '../../utils/cn.js';
+import { resolveMediaUrl } from '../../utils/media.js';
 import {
   ChevronLeft, ChevronRight, CheckCircle2, Lock, Menu, X,
   Video, FileText, Youtube, File, Clock, BookOpen,
@@ -43,18 +44,7 @@ function getYouTubeId(url) {
   return match ? match[1] : null;
 }
 
-// ── Resolve Media File URL ──────────────────────────────────
-function resolveMediaUrl(url) {
-  if (!url) return '';
-  // Fallback for previous simulated placeholder URLs from older test data
-  if (url.includes('storage.qualiva.io/videos/')) {
-    return '/uploads/lessons/sample-video.mp4';
-  }
-  if (url.includes('storage.qualiva.io/documents/')) {
-    return '/uploads/lessons/sample-doc.pdf';
-  }
-  return url;
-}
+
 
 // ── Format Seconds to MM:SS ──────────────────────────────────
 function formatTime(seconds) {

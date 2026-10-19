@@ -25,6 +25,11 @@ const MODEL_COLLECTIONS = {
   activeSession: 'ActiveSession',
 };
 
+function escapeRegex(str) {
+  if (typeof str !== 'string') return String(str || '');
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Translate Prisma where queries into MongoDB query filters
 function translateWhere(where = {}) {
   if (!where || typeof where !== 'object') return {};
@@ -70,7 +75,7 @@ function translateWhere(where = {}) {
         else if (op === 'lte') subFilter.$lte = opVal;
         else if (op === 'gt') subFilter.$gt = opVal;
         else if (op === 'lt') subFilter.$lt = opVal;
-        else if (op === 'contains') subFilter.$regex = new RegExp(opVal, 'i');
+        else if (op === 'contains') subFilter.$regex = new RegExp(escapeRegex(opVal), 'i');
         else if (op === 'not') subFilter.$ne = opVal;
         else subFilter[op] = opVal;
       }

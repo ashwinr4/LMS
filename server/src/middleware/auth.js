@@ -2,7 +2,9 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 
-const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || 'esmms_super_secure_access_token_secret_key_2026_x89';
+function getAccessSecret() {
+  return process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+}
 
 export async function authenticateToken(req, res, next) {
   try {
@@ -17,7 +19,17 @@ export async function authenticateToken(req, res, next) {
       });
     }
 
-    jwt.verify(token, JWT_ACCESS_SECRET, async (err, decoded) => {
+    const secret = getAccessSecret();
+    if (!secret) {
+      logger.error('CRITICAL: JWT access secret is not configured.');
+      return res.status(500).json({
+        success: false,
+        error: 'SERVER_CONFIGURATION_ERROR',
+        message: 'Authentication service is misconfigured.',
+      });
+    }
+
+    jwt.verify(token, secret, async (err, decoded) => {
       if (err) {
         return res.status(401).json({
           success: false,
@@ -84,6 +96,59 @@ export async function authenticateToken(req, res, next) {
       error: 'AUTH_INTERNAL_ERROR',
       message: 'An internal authentication error occurred.',
     });
+  }
+}
+
+/**
+ * Optional Authentication: Attaches req.user if a valid token is present;
+ * otherwise leaves req.user null and continues without failing.
+ */
+export async function optionalAuthenticateToken(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1];
+    if (!token) {
+      req.user = null;
+      return next();
+    }
+
+    const secret = getAccessSecret();
+    if (!secret) {
+      req.user = null;
+      return next();
+    }
+
+    jwt.verify(token, secret, async (err, decoded) => {
+      if (err || !decoded?.sub) {
+        req.user = null;
+        return next();
+      }
+
+      try {
+        const user = await prisma.user.findUnique({
+          where: { id: decoded.sub },
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+            status: true,
+            department: true,
+            avatar: true,
+            lockUntil: true,
+            moderatorPermissions: true,
+            requestedRole: true,
+          },
+        });
+        req.user = user || null;
+      } catch {
+        req.user = null;
+      }
+      next();
+    });
+  } catch {
+    req.user = null;
+    next();
   }
 }
 

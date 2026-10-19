@@ -9,16 +9,15 @@ import cookieParser from 'cookie-parser';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
 import { logger } from './utils/logger.js';
+import { isOriginAllowed, getAllowedOrigins, buildContentSecurityPolicyDirectives } from './utils/securityHeaders.js';
+import { getUploadRootDir, getStorageDiagnostics } from './utils/storage.js';
 
 dotenv.config();
 
-// Ensure local uploads directory exists on fresh cloud container deployment
-if (!fs.existsSync('uploads')) {
-  try {
-    fs.mkdirSync('uploads', { recursive: true });
-  } catch {}
-}
+// Ensure root uploads directory exists (local or persistent mount)
+getUploadRootDir();
 
 const app = express();
 // Enable trust proxy for cloud deployment (Render, Railway, Vercel reverse proxies)
@@ -27,23 +26,19 @@ app.set('trust proxy', 1);
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5050;
 
-const rawClientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
-const trimmedClientUrl = rawClientUrl.replace(/\/$/, '');
-const ALLOWED_ORIGINS = [
-  trimmedClientUrl,
-  `${trimmedClientUrl}/`,
-  'http://localhost:5174',
-  'http://localhost:5173',
-];
+function getAccessSecret() {
+  return process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
+}
 
 // 1. Socket.io Initialization
 export const io = new SocketIOServer(server, {
   cors: {
     origin: (origin, callback) => {
-      if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.onrender.com') || origin.endsWith('.vercel.app')) {
+      if (isOriginAllowed(origin)) {
         callback(null, true);
       } else {
-        callback(null, true);
+        logger.warn(`WebSocket connection blocked from unauthorized origin: ${origin}`);
+        callback(new Error('Blocked by CORS policy'));
       }
     },
     credentials: true,
@@ -51,29 +46,70 @@ export const io = new SocketIOServer(server, {
   },
 });
 
-io.on('connection', (socket) => {
-  logger.info(`WebSocket Client Connected: ${socket.id}`);
+import { authenticateSocket, canUserAccessCourseRoom } from './utils/socketAuth.js';
 
-  // Join role room
+// Socket.io JWT Authentication Middleware
+io.use(authenticateSocket);
+
+io.on('connection', (socket) => {
+  logger.info(`WebSocket Client Connected: ${socket.id} (User: ${socket.user?.email || 'Authenticated User'}, Role: ${socket.user?.role})`);
+
+  // Join role room (Authenticated and verified role only)
   socket.on('join_role_room', (role) => {
+    if (!socket.user || (socket.user.role !== role && socket.user.role !== 'ADMIN')) {
+      logger.warn(`Unauthorized WebSocket role room subscription attempt: socket ${socket.id} attempted to join role_${role}`);
+      socket.emit('socket_error', {
+        event: 'join_role_room',
+        error: 'FORBIDDEN_ROLE_ROOM',
+        message: `You are not authorized to subscribe to role_${role}.`,
+      });
+      return;
+    }
     const room = `role_${role}`;
     socket.join(room);
     logger.info(`Socket ${socket.id} joined role room: ${room}`);
   });
 
-  // Join user room for targeted notifications
+  // Join user room for targeted notifications (Authenticated self or admin only)
   socket.on('join_user_room', (userId) => {
+    const callerId = socket.user?.sub || socket.user?.id;
+    if (!socket.user || (callerId !== userId && socket.user.role !== 'ADMIN')) {
+      logger.warn(`Unauthorized WebSocket user room subscription attempt: socket ${socket.id} attempted to join user_${userId}`);
+      socket.emit('socket_error', {
+        event: 'join_user_room',
+        error: 'FORBIDDEN_USER_ROOM',
+        message: `You are not authorized to subscribe to user_${userId}.`,
+      });
+      return;
+    }
     const room = `user_${userId}`;
     socket.join(room);
     logger.info(`Socket ${socket.id} joined user room: ${room}`);
   });
 
-  // Join course room for real-time curriculum and player updates
-  socket.on('join_course_room', (courseId) => {
-    if (courseId) {
+  // Join course room for real-time curriculum and player updates (Strictly authorized)
+  socket.on('join_course_room', async (courseId) => {
+    if (!courseId) return;
+
+    try {
+      const access = await canUserAccessCourseRoom(socket.user, courseId);
+      if (!access.allowed) {
+        logger.warn(
+          `Unauthorized WebSocket course room join attempt: user ${socket.user?.id} (${socket.user?.role}) denied for course ${courseId}. Reason: ${access.reason}`
+        );
+        socket.emit('socket_error', {
+          event: 'join_course_room',
+          error: 'FORBIDDEN_COURSE_ACCESS',
+          message: 'You are not authorized to join updates for this course room.',
+        });
+        return;
+      }
+
       const room = `course_${courseId}`;
       socket.join(room);
-      logger.info(`Socket ${socket.id} joined course room: ${room}`);
+      logger.info(`Socket ${socket.id} (User: ${socket.user?.id}) joined course room: ${room}`);
+    } catch (err) {
+      logger.error(`Error validating course room join for socket ${socket.id}: ${err.message}`);
     }
   });
 
@@ -93,7 +129,9 @@ io.on('connection', (socket) => {
 // 2. Global Security Middlewares
 app.use(
   helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      directives: buildContentSecurityPolicyDirectives(),
+    },
     crossOriginEmbedderPolicy: false,
   })
 );
@@ -101,10 +139,11 @@ app.use(
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.onrender.com') || origin.endsWith('.vercel.app')) {
+      if (isOriginAllowed(origin)) {
         callback(null, true);
       } else {
-        callback(null, true);
+        logger.warn(`CORS blocked unauthorized origin: ${origin}`);
+        callback(new Error('Blocked by CORS security policy'));
       }
     },
     credentials: true,
@@ -120,12 +159,17 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', uptime: Math.floor(process.uptime()), timestamp: new Date().toISOString() });
 });
 
-// Serve static uploaded course videos, documents, and media with HTTP Range streaming support
-app.use('/uploads', express.static(path.resolve('uploads'), {
+// Serve static uploaded course videos, documents, and media with HTTP Range streaming support and security headers
+app.use('/uploads', express.static(getUploadRootDir(), {
   acceptRanges: true,
-  setHeaders: (res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+  setHeaders: (res, filePath) => {
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    const ext = path.extname(filePath).toLowerCase();
+    // Allow inline playback/viewing for standard media formats; force attachment download for all other file types
+    if (!['.mp4', '.webm', '.ogg', '.png', '.jpg', '.jpeg', '.webp', '.gif'].includes(ext)) {
+      res.setHeader('Content-Disposition', 'attachment');
+    }
   },
 }));
 
@@ -134,10 +178,10 @@ app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 3. Global Rate Limiter
+// 3. Global & Authentication Rate Limiters
 const globalLimiter = rateLimit({
   windowMs: Number(process.env.GLOBAL_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-  max: Number(process.env.GLOBAL_RATE_LIMIT_MAX) || 100,
+  max: Number(process.env.GLOBAL_RATE_LIMIT_MAX) || 1500, // 1500 req/15min ensures smooth playback and browsing
   message: {
     success: false,
     message: 'Too many requests from this IP. Please try again later.',
@@ -146,6 +190,18 @@ const globalLimiter = rateLimit({
   legacyHeaders: false,
 });
 app.use('/api', globalLimiter);
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 60, // Dedicated strict limiter for authentication endpoints
+  message: {
+    success: false,
+    error: 'RATE_LIMIT_EXCEEDED',
+    message: 'Too many authentication attempts from this IP. Please try again after 15 minutes.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // 4. API Dynamic Cache-Control (Prevents intermediate caching of sensitive dynamic responses)
 app.use('/api', (req, res, next) => {
@@ -185,7 +241,7 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import transferRoutes from './routes/transferRoutes.js';
 
 // 7. Mount Modular API Routes
-app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/auth', authLimiter, authRoutes);
 app.use('/api/v1/certificates', certificateRoutes);
 app.use('/api/v1/modules', moduleRoutes);
 app.use('/api/v1/enrollments', enrollmentRoutes);
@@ -260,6 +316,23 @@ app.use((err, req, res, next) => {
     });
   }
 
+  // Handle Multer upload errors and rejected file extensions as client errors (400)
+  if (err.name === 'MulterError') {
+    return res.status(400).json({
+      success: false,
+      error: 'UPLOAD_ERROR',
+      message: err.code === 'LIMIT_FILE_SIZE' ? 'File size exceeds maximum allowable upload limit.' : err.message,
+    });
+  }
+
+  if (err.message && err.message.startsWith('INVALID_FILE_TYPE')) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_FILE_TYPE',
+      message: err.message.replace(/^INVALID_FILE_TYPE:\s*/, ''),
+    });
+  }
+
   res.status(500).json({
     success: false,
     error: 'SERVER_EXCEPTION',
@@ -276,12 +349,17 @@ process.on('unhandledRejection', (reason, promise) => {
   logger.error(`CRITICAL: Unhandled Promise Rejection caught by Crash Guard: ${reason?.message || reason}`);
 });
 
-// 10. Start Server
+// 10. Startup Validation & Launch Server
+import { validateEnvironmentConfig } from './utils/envValidation.js';
+export { validateEnvironmentConfig };
+
+validateEnvironmentConfig();
+
 server.listen(PORT, '0.0.0.0', () => {
   logger.info(`====================================================`);
   logger.info(`🚀 ESMMS Backend Server running on port ${PORT} (0.0.0.0)`);
   logger.info(`📡 WebSocket Server initialized on port ${PORT}`);
-  logger.info(`🔒 Security headers (Helmet) & CORS active for ${ALLOWED_ORIGINS.join(', ')}`);
+  logger.info(`🔒 Security headers (Helmet) & CORS active for ${getAllowedOrigins().join(', ')}`);
   logger.info(`🩺 Health Check: http://localhost:${PORT}/api/v1/health`);
   logger.info(`====================================================`);
 });

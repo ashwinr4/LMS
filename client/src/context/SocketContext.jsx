@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext.jsx';
 import { useToast } from './ToastContext.jsx';
+import { secureStorage, STORAGE_KEYS } from '../utils/secureStorage.js';
 
 const SocketContext = createContext(null);
 
@@ -18,12 +19,24 @@ export function SocketProvider({ children }) {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
+    const token = secureStorage.getItem(STORAGE_KEYS.TOKEN);
+    if (!token) {
+      setConnected(false);
+      setSocket(null);
+      return;
+    }
+
     const s = io(SOCKET_URL, {
       withCredentials: true,
       transports: ['websocket', 'polling'],
       upgrade: false,
       reconnectionAttempts: 10,
       reconnectionDelay: 500,
+      auth: { token },
+    });
+
+    s.on('connect_error', (err) => {
+      setConnected(false);
     });
 
     s.on('connect', () => {

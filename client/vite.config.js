@@ -6,41 +6,52 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CSP_DIRECTIVES = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob: https: http://localhost:5050",
-  "media-src 'self' blob: data: http://localhost:5050 https:",
-  "connect-src 'self' http://localhost:5050 ws://localhost:5050 ws://localhost:5173 https://*.onrender.com wss://*.onrender.com https://accounts.google.com",
-  "frame-src 'self' https://accounts.google.com https://www.youtube.com https://youtube.com blob: data:",
-  "worker-src 'self' blob:",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'self'",
-].join('; ');
+function buildCsp(isDev) {
+  const devConnect = isDev ? 'http://localhost:5050 ws://localhost:5050 ws://localhost:5173 ' : '';
+  const devMedia = isDev ? 'http://localhost:5050 ' : '';
 
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'SAMEORIGIN',
-  'Content-Security-Policy': CSP_DIRECTIVES,
-};
+  return [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    `img-src 'self' data: blob: https: ${devMedia}`.trim(),
+    `media-src 'self' blob: data: https: ${devMedia}`.trim(),
+    `connect-src 'self' ${devConnect}https: wss: https://accounts.google.com`.trim(),
+    "frame-src 'self' https://accounts.google.com https://www.youtube.com https://youtube.com blob: data:",
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+  ].join('; ');
+}
 
-export default defineConfig({
-  plugins: [react()],
+export default defineConfig(({ mode }) => {
+  const isDev = mode === 'development';
+  const securityHeaders = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Content-Security-Policy': buildCsp(isDev),
+  };
+
+  return {
+    plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
   },
   server: {
+    // Bind beyond loopback so host.docker.internal scanners can reach the dev server.
+    host: '0.0.0.0',
     port: 5173,
-    headers: SECURITY_HEADERS,
+    // Fail loudly if 5173 is occupied instead of silently moving the scan target.
+    strictPort: true,
+    headers: securityHeaders,
     proxy: {
       '/api': {
-        target: 'http://localhost:5050',
+        target: 'http://127.0.0.1:5050',
         changeOrigin: true,
         secure: false,
         configure: (proxy) => {
@@ -57,11 +68,11 @@ export default defineConfig({
         },
       },
       '/uploads': {
-        target: 'http://localhost:5050',
+        target: 'http://127.0.0.1:5050',
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'http://localhost:5050',
+        target: 'http://127.0.0.1:5050',
         ws: true,
         changeOrigin: true,
         configure: (proxy) => {
@@ -78,8 +89,10 @@ export default defineConfig({
     },
   },
   preview: {
+    host: '0.0.0.0',
     port: 5173,
-    headers: SECURITY_HEADERS,
+    strictPort: true,
+    headers: securityHeaders,
   },
   build: {
     rollupOptions: {
@@ -93,4 +106,5 @@ export default defineConfig({
     },
     chunkSizeWarningLimit: 1000,
   },
+};
 });

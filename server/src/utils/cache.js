@@ -31,6 +31,10 @@ class MemoryCache {
     this.store.delete(key);
   }
 
+  del(key) {
+    this.store.delete(key);
+  }
+
   invalidatePrefix(prefix) {
     for (const key of this.store.keys()) {
       if (key.startsWith(prefix)) {

@@ -564,12 +564,16 @@ export async function resetUserPassword(req, res) {
     }
 
     // Dispatch live email to user with new temporary password
-    await sendPasswordResetEmail(user.email, tempPass, user.name);
+    const emailResult = await sendPasswordResetEmail(user.email, tempPass, user.name);
 
     cache.invalidatePrefix('admin:');
     return res.status(200).json({
       success: true,
-      message: `Password reset successfully for ${user.email}. Temporary credentials emailed.`,
+      emailDelivered: Boolean(emailResult.delivered),
+      simulatedEmail: Boolean(emailResult.simulated),
+      message: emailResult.delivered
+        ? `Password reset successfully for ${user.email}. Temporary credentials emailed.`
+        : `Password reset successfully for ${user.email}. Note: Email delivery ${emailResult.simulated ? 'was simulated (development mode)' : 'is not configured or failed'}; temporary password provided below.`,
       temporaryPassword: tempPass,
     });
   } catch (error) {
@@ -1530,7 +1534,28 @@ export async function deleteUser(req, res) {
       logger.warn(`Could not dispatch account deletion email to ${user.email}: ${emailErr.message}`);
     });
 
-    // 2. Cascade delete all related records
+    // 2. Safely reassign course creation and instruction ownership to deleting admin to preserve student progress
+    try {
+      await prisma.module.updateMany({
+        where: { createdBy: id },
+        data: { createdBy: req.user.id },
+      });
+      await prisma.module.updateMany({
+        where: { instructorId: id },
+        data: {
+          instructorId: req.user.id,
+          instructorName: req.user.name || 'System Administrator',
+        },
+      });
+      await prisma.courseEnrollmentRequest.updateMany({
+        where: { creatorId: id },
+        data: { creatorId: req.user.id },
+      });
+    } catch (reassignErr) {
+      logger.warn(`Notice while reassigning course ownership on user deletion: ${reassignErr.message}`);
+    }
+
+    // 3. Cascade delete all related records
     const safeDeleteMany = async (modelName, whereClause) => {
       try {
         if (prisma[modelName] && typeof prisma[modelName].deleteMany === 'function') {
@@ -1552,7 +1577,7 @@ export async function deleteUser(req, res) {
       safeDeleteMany('chatMessage', { senderId: id }),
     ]);
 
-    // 3. Delete the user (replicated to backup via the Universal Proxy)
+    // 4. Delete the user (replicated to backup via the Universal Proxy)
     await prisma.user.delete({
       where: { id },
     });

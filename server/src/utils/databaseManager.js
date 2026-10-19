@@ -96,7 +96,7 @@ export async function testConnection(rawUrl) {
     };
     if (isSrv) {
       mongoOptions.tls = true;
-      mongoOptions.tlsAllowInvalidCertificates = true;
+      mongoOptions.tlsAllowInvalidCertificates = false;
     }
 
     const client = new MongoClient(url, mongoOptions);

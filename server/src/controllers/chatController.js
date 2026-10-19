@@ -1,6 +1,7 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { io } from '../server.js';
+import { resolveMediaUrl } from '../utils/storage.js';
 import xss from 'xss';
 
 const userLastViewedAnnouncements = new Map();
@@ -91,8 +92,36 @@ export async function getMessages(req, res) {
         };
       }
     } else if (type === 'DIRECT') {
-      if (audit === 'true' && (userRole === 'ADMIN' || userRole === 'MODERATOR')) {
-        where = { type: 'DIRECT' };
+      if (audit === 'true') {
+        if (userRole === 'ADMIN') {
+          where = { type: 'DIRECT' };
+        } else if (userRole === 'MODERATOR') {
+          let perms = {};
+          try {
+            if (req.user?.moderatorPermissions) {
+              perms = typeof req.user.moderatorPermissions === 'string'
+                ? JSON.parse(req.user.moderatorPermissions)
+                : req.user.moderatorPermissions;
+            }
+          } catch {
+            perms = {};
+          }
+          if (perms?.messages?.manage) {
+            where = { type: 'DIRECT' };
+          } else {
+            return res.status(403).json({
+              success: false,
+              error: 'MODERATOR_PERMISSION_DENIED',
+              message: 'Direct message auditing requires explicit messages.manage moderation authority.',
+            });
+          }
+        } else {
+          return res.status(403).json({
+            success: false,
+            error: 'FORBIDDEN_ROLE',
+            message: 'Direct message auditing is restricted to authorized platform administrators and moderators.',
+          });
+        }
       } else {
         if (!contactId) {
           return res.status(200).json({ success: true, count: 0, messages: [] });
@@ -174,11 +203,13 @@ export async function uploadChatFile(req, res) {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'NO_FILE', message: 'No file uploaded.' });
     }
-    const fileUrl = `/uploads/chat/${req.file.filename}`;
+    const relativeUrl = `/uploads/chat/${req.file.filename}`;
+    const fileUrl = resolveMediaUrl(relativeUrl, req);
     return res.status(200).json({
       success: true,
       file: {
         fileUrl,
+        relativeUrl,
         fileName: req.file.originalname,
         fileType: req.file.mimetype,
         fileSize: req.file.size,

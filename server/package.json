@@ -11,7 +11,9 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "node prisma/seed.js"
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:seed": "node prisma/seed.js",
+    "admin:bootstrap": "node prisma/bootstrapAdmin.js"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",

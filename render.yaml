@@ -26,6 +26,10 @@ services:
         sync: false # Set to your deployed Render frontend domain (e.g. https://qualiva-frontend.onrender.com)
       - key: DATABASE_URL
         sync: false # Set your managed PostgreSQL / CockroachDB / MySQL connection string
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
       - key: JWT_SECRET
         generateValue: true
       - key: REFRESH_TOKEN_SECRET
@@ -38,15 +42,31 @@ services:
         sync: false # Optional: Google Cloud OAuth Client Secret
       - key: GEMINI_API_KEY
         sync: false # Optional: AI generation features
+      - key: BACKEND_URL
+        sync: false # Set to your deployed Render backend domain (e.g. https://qualiva-backend.onrender.com)
+      - key: ADDITIONAL_ALLOWED_ORIGINS
+        sync: false # Optional: Custom domains (e.g. https://app.yourdomain.com,https://qualiva.com)
+      - key: UPLOAD_DIR
+        value: /var/data/uploads # Mount path for persistent disk
+      - key: SMTP_HOST
+        sync: false # Optional: SMTP host (e.g. smtp.gmail.com or smtp.resend.com)
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USER
+        sync: false # Optional: SMTP username
+      - key: SMTP_PASS
+        sync: false # Optional: SMTP password
+      - key: SMTP_FROM
+        sync: false # Optional: Sender email address
       - key: RESEND_API_KEY
-        sync: false # Optional: Email dispatch
+        sync: false # Optional: Resend API Key (alternative to standard SMTP)
       - key: FROM_EMAIL
         value: onboarding@resend.dev
-    # Note: If persistent media uploads are required on Render, attach a persistent disk:
-    # disk:
-    #   name: qualiva-uploads
-    #   mountPath: /opt/render/project/src/server/uploads
-    #   sizeGB: 10
+    # Persistent disk volume ensures uploaded videos, PDFs, and chat attachments survive redeployments:
+    disk:
+      name: qualiva-uploads
+      mountPath: /var/data/uploads
+      sizeGB: 10
 
   # ---------------------------------------------------------
   # FRONTEND STATIC SITE
@@ -71,9 +91,11 @@ services:
         value: nosniff
       - path: /*
         name: Content-Security-Policy
-        value: "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https: http://localhost:5050; media-src 'self' blob: data: http://localhost:5050 https:; connect-src 'self' http://localhost:5050 ws://localhost:5050 https://*.onrender.com wss://*.onrender.com https://accounts.google.com; frame-src 'self' https://accounts.google.com https://www.youtube.com https://youtube.com blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self';"
+        value: "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob: data: https:; connect-src 'self' https: wss: https://accounts.google.com; frame-src 'self' https://accounts.google.com https://www.youtube.com https://youtube.com blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self';"
     envVars:
       - key: VITE_API_URL
         sync: false # Set to your deployed Render backend URL (e.g. https://qualiva-backend.onrender.com/api/v1)
+      - key: VITE_STORAGE_URL
+        sync: false # Optional: Match backend host for media streaming (e.g. https://qualiva-backend.onrender.com)
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false # Optional: Match backend GOOGLE_CLIENT_ID

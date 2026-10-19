@@ -24,6 +24,24 @@ export async function requestEnrollment(req, res) {
       return res.status(404).json({ success: false, message: 'Course module not found.' });
     }
 
+    // Enforce server-side enrollment eligibility: Course must be published and ACTIVE
+    if (module.status !== 'ACTIVE') {
+      return res.status(400).json({
+        success: false,
+        error: 'COURSE_NOT_ENROLLABLE',
+        message: 'Enrollment is only permitted for published and active courses.',
+      });
+    }
+
+    // Check course platform expiration
+    if (module.expiresAt && new Date(module.expiresAt).getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        error: 'COURSE_EXPIRED',
+        message: 'This course has reached its platform expiration date and is no longer accepting enrollments.',
+      });
+    }
+
     // Check if user is already enrolled with an active assignment
     const existingAssignment = await prisma.assignment.findUnique({
       where: { userId_moduleId: { userId: studentId, moduleId } },
@@ -272,7 +290,7 @@ export async function approveEnrollment(req, res) {
       where: { id },
       include: {
         student: { select: { id: true, name: true, email: true, department: true } },
-        module: { select: { id: true, code: true, title: true } },
+        module: { select: { id: true, code: true, title: true, status: true, expiresAt: true } },
       },
     });
 
@@ -282,6 +300,26 @@ export async function approveEnrollment(req, res) {
 
     if (request.status === 'APPROVED') {
       return res.status(400).json({ success: false, message: 'Request is already approved.' });
+    }
+
+    if (request.status === 'REJECTED') {
+      return res.status(400).json({ success: false, message: 'Cannot approve a rejected enrollment request.' });
+    }
+
+    if (!request.module || request.module.status !== 'ACTIVE') {
+      return res.status(400).json({
+        success: false,
+        error: 'COURSE_INACTIVE',
+        message: 'Cannot approve enrollment for an inactive, draft, or archived course.',
+      });
+    }
+
+    if (request.module.expiresAt && new Date(request.module.expiresAt).getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        error: 'COURSE_EXPIRED',
+        message: 'Cannot approve enrollment for an expired course.',
+      });
     }
 
     const dueDate = new Date(Date.now() + Number(dueDateDays) * 24 * 60 * 60 * 1000);
@@ -396,6 +434,14 @@ export async function rejectEnrollment(req, res) {
 
     if (!request) {
       return res.status(404).json({ success: false, message: 'Enrollment request not found.' });
+    }
+
+    if (request.status === 'APPROVED' || request.status === 'REJECTED') {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_STATE_TRANSITION',
+        message: `Request is already in state: ${request.status}`,
+      });
     }
 
     // Ownership validation: Course Creators can only decline requests for their own courses

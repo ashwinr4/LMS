@@ -68,9 +68,8 @@ export default function Register() {
 
   const roles = [
     { value: 'USER', label: 'Student / Learner' },
-    { value: 'COURSE_CREATOR', label: 'Course Creator / Instructor' },
-    { value: 'MODERATOR', label: 'Moderator / Compliance' },
-    { value: 'ADMIN', label: 'Administrator / System Governance' },
+    { value: 'COURSE_CREATOR', label: 'Course Creator / Instructor (Requires Approval)' },
+    { value: 'MODERATOR', label: 'Moderator / Compliance (Requires Approval)' },
   ];
 
   // Password Strength Evaluation

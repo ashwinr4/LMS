@@ -8,6 +8,8 @@
  * 4. Dangerous Content & Prompt Injection Shield
  */
 
+import xss from 'xss';
+
 export function scanDocumentSecurity(buffer, filename) {
   if (!buffer || buffer.length === 0) {
     return { safe: false, reason: 'Empty or unreadable file buffer.' };
@@ -105,10 +107,8 @@ export function scanDocumentSecurity(buffer, filename) {
  */
 export function sanitizeQuestionText(str) {
   if (!str) return '';
-  return str
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-    .replace(/\bon\w+\s*=/gi, '')
-    .replace(/javascript:/gi, '')
-    .trim();
+  return xss(str, {
+    whiteList: {}, // Neutralize all HTML tags
+    stripIgnoreTagBody: ['script', 'style', 'xml', 'iframe', 'object'],
+  }).trim();
 }
