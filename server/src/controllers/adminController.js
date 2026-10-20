@@ -2,7 +2,8 @@ import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { sendPasswordResetEmail, sendAccountDeletedEmail } from '../utils/email.js';
 import bcrypt from 'bcryptjs';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import { parse as parseCsv } from 'csv-parse/sync';
 import crypto from 'crypto';
 import { io } from '../server.js';
 import { cache } from '../utils/cache.js';
@@ -597,15 +598,61 @@ export async function bulkImportUsers(req, res) {
 
     // Check if uploaded via Multer file or JSON array in body
     if (req.file) {
-      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      rows = XLSX.utils.sheet_to_json(firstSheet);
+      const isZipContainer = req.file.buffer && req.file.buffer.length >= 2 && req.file.buffer[0] === 0x50 && req.file.buffer[1] === 0x4b;
+      const isCsv = req.file.mimetype === 'text/csv' || (req.file.originalname && req.file.originalname.toLowerCase().endsWith('.csv'));
+
+      if (isZipContainer && !isCsv) {
+        // Parse XLSX using ExcelJS
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(req.file.buffer);
+        const worksheet = workbook.worksheets[0];
+        if (worksheet) {
+          const headers = [];
+          worksheet.getRow(1).eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            headers[colNumber] = cell.value ? String(cell.value).trim() : '';
+          });
+          worksheet.eachRow((row, rowNumber) => {
+            if (rowNumber === 1) return; // Skip header row
+            const rowObj = {};
+            let hasValue = false;
+            row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+              const header = headers[colNumber];
+              if (header) {
+                let val = cell.value;
+                if (val && typeof val === 'object') {
+                  if (val.text) val = val.text;
+                  else if (val.result !== undefined) val = val.result;
+                }
+                if (val !== null && val !== undefined) {
+                  rowObj[header] = val;
+                  hasValue = true;
+                }
+              }
+            });
+            if (hasValue) {
+              rows.push(rowObj);
+            }
+          });
+        }
+      } else {
+        // Parse CSV using csv-parse/sync
+        const csvContent = req.file.buffer.toString('utf8');
+        rows = parseCsv(csvContent, {
+          columns: true,
+          skip_empty_lines: true,
+          trim: true,
+          relax_column_count: true,
+        });
+      }
     } else if (Array.isArray(req.body.users)) {
       rows = req.body.users;
     } else if (req.body.csvText) {
-      const workbook = XLSX.read(req.body.csvText, { type: 'string' });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      rows = XLSX.utils.sheet_to_json(firstSheet);
+      rows = parseCsv(req.body.csvText, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true,
+        relax_column_count: true,
+      });
     } else {
       return res.status(400).json({
         success: false,
