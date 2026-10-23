@@ -113,7 +113,19 @@ function applySelect(doc, select) {
   const result = {};
   for (const [field, isSelected] of Object.entries(select)) {
     if (isSelected && field !== '_count') {
-      result[field] = doc[field];
+      if (doc[field] !== undefined) {
+        if (typeof isSelected === 'object' && isSelected.select && doc[field]) {
+          if (Array.isArray(doc[field])) {
+            result[field] = doc[field].map((subDoc) => applySelect(subDoc, isSelected.select));
+          } else if (typeof doc[field] === 'object') {
+            result[field] = applySelect(doc[field], isSelected.select);
+          } else {
+            result[field] = doc[field];
+          }
+        } else {
+          result[field] = doc[field];
+        }
+      }
     }
   }
   return result;
@@ -189,8 +201,18 @@ export class MongoAdapter {
         let result = { ...doc };
         if (result._id && !result.id) result.id = String(result._id);
 
-        if (args.include) {
-          result = await self.handleInclude(modelKey, result, args.include);
+        let includeToProcess = args.include ? { ...args.include } : null;
+        if (args.select) {
+          for (const [k, v] of Object.entries(args.select)) {
+            if (v && typeof v === 'object' && !Array.isArray(v) && k !== '_count') {
+              if (!includeToProcess) includeToProcess = {};
+              includeToProcess[k] = v;
+            }
+          }
+        }
+
+        if (includeToProcess) {
+          result = await self.handleInclude(modelKey, result, includeToProcess);
         }
         if (args.select) {
           result = applySelect(result, args.select);
@@ -208,7 +230,23 @@ export class MongoAdapter {
 
         let result = { ...doc };
         if (result._id && !result.id) result.id = String(result._id);
-        if (args.select) result = applySelect(result, args.select);
+
+        let includeToProcess = args.include ? { ...args.include } : null;
+        if (args.select) {
+          for (const [k, v] of Object.entries(args.select)) {
+            if (v && typeof v === 'object' && !Array.isArray(v) && k !== '_count') {
+              if (!includeToProcess) includeToProcess = {};
+              includeToProcess[k] = v;
+            }
+          }
+        }
+
+        if (includeToProcess) {
+          result = await self.handleInclude(modelKey, result, includeToProcess);
+        }
+        if (args.select) {
+          result = applySelect(result, args.select);
+        }
         return result;
       },
 
@@ -258,7 +296,11 @@ export class MongoAdapter {
         if (args.include && modelKey === 'assignment' && args.include.module) {
           const moduleIds = [...new Set(docs.map((d) => d.moduleId).filter(Boolean))];
           const modules = moduleIds.length
-            ? await self.module.findMany({ where: { id: { in: moduleIds } }, include: args.include.module.include })
+            ? await self.module.findMany({
+                where: { id: { in: moduleIds } },
+                include: args.include.module.include,
+                select: args.include.module.select,
+              })
             : [];
           const moduleMap = new Map(modules.map((m) => [m.id, m]));
 
@@ -272,12 +314,42 @@ export class MongoAdapter {
           return results;
         }
 
+        if (args.include && modelKey === 'assessmentSubmission' && args.include.assessment) {
+          const assessmentIds = [...new Set(docs.map((d) => d.assessmentId).filter(Boolean))];
+          const assessments = assessmentIds.length
+            ? await self.assessment.findMany({
+                where: { id: { in: assessmentIds } },
+                select: args.include.assessment.select,
+              })
+            : [];
+          const assessmentMap = new Map(assessments.map((a) => [a.id, a]));
+
+          for (let doc of docs) {
+            let item = { ...doc };
+            if (item._id && !item.id) item.id = String(item._id);
+            item.assessment = assessmentMap.get(item.assessmentId) || null;
+            if (args.select) item = applySelect(item, args.select);
+            results.push(item);
+          }
+          return results;
+        }
+
         for (let doc of docs) {
           let item = { ...doc };
           if (item._id && !item.id) item.id = String(item._id);
 
-          if (args.include) {
-            item = await self.handleInclude(modelKey, item, args.include);
+          let includeToProcess = args.include ? { ...args.include } : null;
+          if (args.select) {
+            for (const [k, v] of Object.entries(args.select)) {
+              if (v && typeof v === 'object' && !Array.isArray(v) && k !== '_count') {
+                if (!includeToProcess) includeToProcess = {};
+                includeToProcess[k] = v;
+              }
+            }
+          }
+
+          if (includeToProcess) {
+            item = await self.handleInclude(modelKey, item, includeToProcess);
           }
           if (args.select) {
             item = applySelect(item, args.select);
@@ -416,6 +488,7 @@ export class MongoAdapter {
       if (include.assessments) {
         result.assessments = await this.assessment.findMany({
           where: { moduleId: doc.id },
+          select: include.assessments.select,
         });
       }
       if (include._count) {
@@ -446,6 +519,13 @@ export class MongoAdapter {
         result.module = await this.module.findUnique({
           where: { id: doc.moduleId },
           include: include.module.include,
+          select: include.module.select,
+        });
+      }
+      if (include.user) {
+        result.user = await this.user.findUnique({
+          where: { id: doc.userId },
+          select: include.user.select,
         });
       }
     }
@@ -466,6 +546,48 @@ export class MongoAdapter {
         result._count = {
           submissions: await this.assessmentSubmission.count({ where: { assessmentId: doc.id } }),
         };
+      }
+    }
+
+    if (modelKey === 'assessmentSubmission') {
+      if (include.assessment) {
+        result.assessment = await this.assessment.findUnique({
+          where: { id: doc.assessmentId },
+          select: include.assessment.select,
+        });
+      }
+      if (include.user) {
+        result.user = await this.user.findUnique({
+          where: { id: doc.userId },
+          select: include.user.select,
+        });
+      }
+    }
+
+    if (modelKey === 'user') {
+      if (include.assignments) {
+        result.assignments = await this.assignment.findMany({
+          where: { userId: doc.id },
+          include: include.assignments.include,
+          select: include.assignments.select,
+          orderBy: include.assignments.orderBy,
+        });
+      }
+      if (include.certificates) {
+        result.certificates = await this.certificate.findMany({
+          where: { userId: doc.id },
+          select: include.certificates.select,
+          orderBy: include.certificates.orderBy,
+        });
+      }
+      if (include.submissions) {
+        result.submissions = await this.assessmentSubmission.findMany({
+          where: { userId: doc.id },
+          include: include.submissions.include,
+          select: include.submissions.select,
+          orderBy: include.submissions.orderBy,
+          take: include.submissions.take,
+        });
       }
     }
 

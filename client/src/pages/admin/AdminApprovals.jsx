@@ -61,7 +61,14 @@ export default function AdminApprovals() {
   const fetchQueue = useCallback(async () => {
     try {
       const { data } = await api.get('/enrollments/admin-queue?status=FORWARDED_TO_ADMIN');
-      setRequests(data.requests || []);
+      const queueList = data.requests || [];
+      setRequests(queueList);
+      if (queueList.length === 0) {
+        api.patch('/notifications/read-by-link', { link: '/admin/approvals', type: 'ENROLLMENT_REQUEST' }).catch(() => {});
+        window.dispatchEvent(new CustomEvent('notifications_clear_queue', {
+          detail: { link: '/admin/approvals', type: 'ENROLLMENT_REQUEST' },
+        }));
+      }
     } catch (err) {
       console.error('Failed to load admin approvals:', err);
     } finally {
@@ -212,7 +219,19 @@ export default function AdminApprovals() {
         title: 'Enrollment Authorized & Provisioned',
         message: `Student ${studentName} has been provisioned with a ${dueDateDays}-day curriculum track.`,
       });
-      setRequests((prev) => prev.filter((r) => r.id !== targetId));
+      setRequests((prev) => {
+        const remaining = prev.filter((r) => r.id !== targetId);
+        if (remaining.length === 0) {
+          api.patch('/notifications/read-by-link', { link: '/admin/approvals', type: 'ENROLLMENT_REQUEST' }).catch(() => {});
+          window.dispatchEvent(new CustomEvent('notifications_clear_queue', {
+            detail: { link: '/admin/approvals', type: 'ENROLLMENT_REQUEST' },
+          }));
+        }
+        return remaining;
+      });
+      window.dispatchEvent(new CustomEvent('notification_request_completed', {
+        detail: { requestId: targetId },
+      }));
       setApprovalModal({ open: false, req: null });
     } catch (err) {
       addToast({
@@ -231,6 +250,19 @@ export default function AdminApprovals() {
     if (!reason) return;
     try {
       await api.patch(`/enrollments/${reqId}/reject`, { rejectionReason: reason });
+      setRequests((prev) => {
+        const remaining = prev.filter((r) => r.id !== reqId);
+        if (remaining.length === 0) {
+          api.patch('/notifications/read-by-link', { link: '/admin/approvals', type: 'ENROLLMENT_REQUEST' }).catch(() => {});
+          window.dispatchEvent(new CustomEvent('notifications_clear_queue', {
+            detail: { link: '/admin/approvals', type: 'ENROLLMENT_REQUEST' },
+          }));
+        }
+        return remaining;
+      });
+      window.dispatchEvent(new CustomEvent('notification_request_completed', {
+        detail: { requestId: reqId },
+      }));
       addToast({
         type: 'info',
         title: 'Application Rejected',

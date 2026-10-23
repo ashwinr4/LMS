@@ -1,6 +1,6 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
-import { sendPasswordResetEmail, sendAccountDeletedEmail } from '../utils/email.js';
+import { sendPasswordResetEmail, sendAccountDeletedEmail, sendUserProvisionedEmail } from '../utils/email.js';
 import bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
 import { parse as parseCsv } from 'csv-parse/sync';
@@ -160,6 +160,12 @@ export async function createUser(req, res) {
 
     logger.info(`Admin ${req.user.email} created user: ${user.email} (${user.role})`);
     cache.invalidatePrefix('admin:');
+
+    // Asynchronously dispatch credentials email without blocking API response
+    sendUserProvisionedEmail(user.email, passwordToHash, user.name, user.role).catch((mailErr) => {
+      logger.warn(`Could not dispatch provisioned user credentials to ${user.email}: ${mailErr.message}`);
+    });
+
     return res.status(201).json({ success: true, message: 'User created successfully.', user });
   } catch (error) {
     logger.error(`Admin Create User Error: ${error.message}`);
@@ -197,45 +203,6 @@ export async function getUserDetail(req, res) {
         moderatorPermissions: true,
         createdAt: true,
         updatedAt: true,
-        assignments: {
-          include: {
-            module: {
-              select: {
-                id: true,
-                code: true,
-                title: true,
-                department: true,
-                duration: true,
-              },
-            },
-          },
-          orderBy: { createdAt: 'desc' },
-        },
-        certificates: {
-          select: {
-            id: true,
-            certificateCode: true,
-            courseTitle: true,
-            scoreAchieved: true,
-            issuedAt: true,
-            status: true,
-            verificationHash: true,
-          },
-          orderBy: { issuedAt: 'desc' },
-        },
-        submissions: {
-          include: {
-            assessment: {
-              select: {
-                id: true,
-                title: true,
-                passingScore: true,
-              },
-            },
-          },
-          orderBy: { submittedAt: 'desc' },
-          take: 15,
-        },
       },
     });
 
@@ -251,6 +218,88 @@ export async function getUserDetail(req, res) {
         message: 'Administrator profiles and records are confidential and restricted to Administrators only.',
       });
     }
+
+    // Retrieve relational details in parallel with resilient provider-agnostic queries
+    const [assignments, certificates, rawSubmissions] = await Promise.all([
+      prisma.assignment.findMany({
+        where: { userId: id },
+        include: {
+          module: {
+            select: {
+              id: true,
+              code: true,
+              title: true,
+              department: true,
+              duration: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.certificate.findMany({
+        where: { userId: id },
+        select: {
+          id: true,
+          certificateCode: true,
+          courseTitle: true,
+          scoreAchieved: true,
+          issuedAt: true,
+          status: true,
+          verificationHash: true,
+        },
+        orderBy: { issuedAt: 'desc' },
+      }),
+      prisma.assessmentSubmission.findMany({
+        where: { userId: id },
+        include: {
+          assessment: {
+            select: {
+              id: true,
+              title: true,
+              passingScore: true,
+            },
+          },
+        },
+        orderBy: { submittedAt: 'desc' },
+        take: 15,
+      }),
+    ]);
+
+    // Resiliently ensure assessment details are populated even if nested relation joins are omitted
+    let submissions = Array.isArray(rawSubmissions) ? rawSubmissions : [];
+    const missingAssessmentIds = submissions
+      .filter((s) => !s.assessment && s.assessmentId)
+      .map((s) => s.assessmentId);
+
+    if (missingAssessmentIds.length > 0) {
+      const distinctMissingIds = [...new Set(missingAssessmentIds)];
+      try {
+        const assessments = await prisma.assessment.findMany({
+          where: { id: { in: distinctMissingIds } },
+          select: { id: true, title: true, passingScore: true },
+        });
+        const assessmentMap = new Map(assessments.map((a) => [a.id, a]));
+        submissions = submissions.map((s) => {
+          if (!s.assessment && s.assessmentId) {
+            return {
+              ...s,
+              assessment: assessmentMap.get(s.assessmentId) || {
+                id: s.assessmentId,
+                title: 'Course Final Assessment',
+                passingScore: 70,
+              },
+            };
+          }
+          return s;
+        });
+      } catch (err) {
+        logger.warn(`Failed to resolve fallback assessment metadata: ${err.message}`);
+      }
+    }
+
+    user.assignments = Array.isArray(assignments) ? assignments : [];
+    user.certificates = Array.isArray(certificates) ? certificates : [];
+    user.submissions = submissions;
 
     return res.status(200).json({
       success: true,
@@ -1629,7 +1678,17 @@ export async function deleteUser(req, res) {
       where: { id },
     });
 
-    // 4. Record Audit Log Entry
+    // 5. Broadcast real-time deletion to active admin and moderator portals
+    if (io) {
+      io.to('role_ADMIN').to('role_MODERATOR').emit('user_deleted', {
+        userId: id,
+        email: user.email,
+        name: user.name,
+      });
+    }
+    cache.invalidatePrefix('admin:');
+
+    // 6. Record Audit Log Entry
     await prisma.auditLog.create({
       data: {
         actorId: req.user.id,

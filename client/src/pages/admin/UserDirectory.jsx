@@ -107,14 +107,23 @@ export default function UserDirectory() {
       }
     };
 
+    const handleUserDeleted = (data) => {
+      if (data?.userId) {
+        setUsers((prev) => prev.filter((u) => u.id !== data.userId));
+        setStats((prev) => (prev ? { ...prev, total: Math.max(0, (prev.total || 1) - 1) } : null));
+      }
+    };
+
     socket.on('password_reset_requested', handlePasswordResetReq);
     socket.on('password_reset_completed', handlePasswordResetDone);
     socket.on('user_status_updated', handleStatusUpdated);
+    socket.on('user_deleted', handleUserDeleted);
 
     return () => {
       socket.off('password_reset_requested', handlePasswordResetReq);
       socket.off('password_reset_completed', handlePasswordResetDone);
       socket.off('user_status_updated', handleStatusUpdated);
+      socket.off('user_deleted', handleUserDeleted);
     };
   }, [socket]);
 

@@ -3,6 +3,63 @@ import { logger } from '../utils/logger.js';
 import { io } from '../server.js';
 import { cache } from '../utils/cache.js';
 
+/**
+ * Helper to mark notification as read and notify connected clients when an enrollment request is resolved/actioned
+ */
+async function markEnrollmentNotificationResolved({ requestId, resolvedByUserId, targetRole }) {
+  try {
+    const notifications = await prisma.notification.findMany({
+      where: {
+        type: 'ENROLLMENT_REQUEST',
+        ...(targetRole ? { targetRole } : {}),
+      },
+      take: 50,
+    });
+
+    const matching = notifications.filter((n) => {
+      try {
+        const meta = typeof n.metadata === 'string' ? JSON.parse(n.metadata) : n.metadata;
+        return meta?.requestId === requestId;
+      } catch {
+        return false;
+      }
+    });
+
+    for (const notif of matching) {
+      let meta = {};
+      try {
+        meta = notif.metadata ? (typeof notif.metadata === 'string' ? JSON.parse(notif.metadata) : notif.metadata) : {};
+      } catch {
+        meta = {};
+      }
+      const readBy = Array.isArray(meta.readBy) ? [...meta.readBy] : [];
+      if (resolvedByUserId && !readBy.includes(resolvedByUserId)) {
+        readBy.push(resolvedByUserId);
+      }
+      meta.readBy = readBy;
+
+      await prisma.notification.update({
+        where: { id: notif.id },
+        data: {
+          isRead: true,
+          metadata: JSON.stringify(meta),
+        },
+      });
+
+      if (io) {
+        if (resolvedByUserId) {
+          io.to(`user_${resolvedByUserId}`).emit('notifications_read', { id: notif.id, requestId });
+        }
+        if (notif.targetRole) {
+          io.to(`role_${notif.targetRole}`).emit('notifications_read', { id: notif.id, requestId });
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn(`Failed to mark enrollment notification as resolved: ${err.message}`);
+  }
+}
+
 // ============================================================
 // STAGE 1: SUBMIT ENROLLMENT APPLICATION (Student)
 // ============================================================
@@ -264,6 +321,13 @@ export async function forwardToAdmin(req, res) {
       });
     }
 
+    // Auto-mark Creator Notification as read and sync client badges
+    await markEnrollmentNotificationResolved({
+      requestId: updated.id,
+      resolvedByUserId: req.user.id,
+      targetRole: 'COURSE_CREATOR',
+    });
+
     logger.info(`Enrollment Request [${id}] forwarded to Admin by Creator [${req.user.id}]`);
     cache.invalidatePrefix('admin:');
 
@@ -401,6 +465,13 @@ export async function approveEnrollment(req, res) {
       io.to('role_ADMIN').emit('admin_request_resolved', { requestId: request.id });
     }
 
+    // Auto-mark Admin Notification as read and sync client badges
+    await markEnrollmentNotificationResolved({
+      requestId: request.id,
+      resolvedByUserId: req.user.id,
+      targetRole: 'ADMIN',
+    });
+
     logger.info(`Enrollment Request [${id}] APPROVED by Admin [${req.user.id}]. Assignment [${assignment.id}] provisioned.`);
     cache.invalidatePrefix('admin:');
 
@@ -508,6 +579,13 @@ export async function rejectEnrollment(req, res) {
         io.to(`user_${request.module.createdBy}`).emit('creator_request_resolved', { requestId: request.id });
       }
     }
+
+    // Auto-mark Notification as read and sync client badges
+    await markEnrollmentNotificationResolved({
+      requestId: request.id,
+      resolvedByUserId: req.user.id,
+      targetRole: req.user.role === 'COURSE_CREATOR' ? 'COURSE_CREATOR' : 'ADMIN',
+    });
 
     cache.invalidatePrefix('admin:');
 

@@ -14,9 +14,19 @@ import {
   AlertTriangle, ShieldAlert, Check, Sparkles, ExternalLink, RefreshCw,
 } from 'lucide-react';
 
-// ── Markdown Renderer (Clean, Accessible Typography) ──────────────
+// ── Markdown Renderer (Clean, Accessible Typography with Strict HTML Escaping) ──────
+function escapeHtml(str) {
+  return (str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function MarkdownRenderer({ content }) {
-  const html = (content || '')
+  const safeContent = escapeHtml(content);
+  const html = safeContent
     .replace(/^# (.+)$/gm, '<h1 class="text-2xl font-bold text-slate-900 dark:text-slate-100 mt-6 mb-3 tracking-tight">$1</h1>')
     .replace(/^## (.+)$/gm, '<h2 class="text-xl font-semibold text-slate-900 dark:text-slate-100 mt-5 mb-2">$1</h2>')
     .replace(/^### (.+)$/gm, '<h3 class="text-base font-semibold text-slate-800 dark:text-slate-200 mt-4 mb-2">$1</h3>')
@@ -86,6 +96,7 @@ export default function LearningPlayer() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [readPercent, setReadPercent] = useState(0);
   const [videoError, setVideoError] = useState(false);
+  const [notEnrolled, setNotEnrolled] = useState(false);
 
   // Real-time video progress & anti-skip state
   const [currentTime, setCurrentTime] = useState(0);
@@ -173,6 +184,9 @@ export default function LearningPlayer() {
         setInitialLoaded(true);
       } catch (err) {
         console.error('Failed to load course:', err);
+        if (err.response?.status === 403 || err.response?.data?.error === 'NOT_ENROLLED') {
+          setNotEnrolled(true);
+        }
       } finally {
         setLoading(false);
       }
@@ -358,7 +372,10 @@ export default function LearningPlayer() {
   const isPlayableVideo = Boolean(
     currentLesson?.type === 'VIDEO' && resolvedMediaUrl && !videoError
   );
-  const isPdfDocument = currentLesson?.documentName?.toLowerCase().endsWith('.pdf') || resolvedMediaUrl.toLowerCase().endsWith('.pdf');
+  const isPdfDocument = Boolean(
+    currentLesson?.documentName?.toLowerCase().endsWith('.pdf') ||
+    resolvedMediaUrl?.toLowerCase().endsWith('.pdf')
+  );
 
   if (loading) {
     return (
@@ -366,6 +383,23 @@ export default function LearningPlayer() {
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="h-8 w-8 text-indigo-600 dark:text-indigo-400 animate-spin" />
           <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Preparing learning environment...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (notEnrolled) {
+    return (
+      <div className="text-center py-24 max-w-md mx-auto space-y-4">
+        <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-500 flex items-center justify-center mx-auto">
+          <ShieldAlert className="h-8 w-8" />
+        </div>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Enrollment Required</h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          You are not enrolled in this course module. Please submit an enrollment application from the course catalog to access the curriculum and lecture materials.
+        </p>
+        <div className="pt-2">
+          <Link to="/courses"><Button>Explore Course Catalog</Button></Link>
         </div>
       </div>
     );
@@ -384,7 +418,7 @@ export default function LearningPlayer() {
   return (
     <div className="space-y-0 animate-fade-in -m-4 sm:-m-6 lg:-m-8 bg-slate-950 text-slate-100 min-h-screen">
       {/* ── Refined Top Header ─────────────────────────── */}
-      <header className="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 sm:px-6 py-3 flex items-center justify-between gap-4 sticky top-0 z-30">
+      <header className="bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 sm:px-6 py-3 flex items-center justify-between gap-4 sticky top-0 z-20">
         <div className="flex items-center gap-3 min-w-0">
           <Link
             to="/my-courses"
@@ -454,7 +488,7 @@ export default function LearningPlayer() {
               <div className="rounded-xl overflow-hidden bg-slate-900 border border-slate-800/80 shadow-2xl relative">
                 {/* Anti-Skip Notice Toast */}
                 {showAntiSkipWarning && (
-                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-amber-500 text-slate-950 px-4 py-2 rounded-lg font-medium text-xs flex items-center gap-2 shadow-lg backdrop-blur animate-fade-in">
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-amber-500 text-slate-950 px-4 py-2 rounded-lg font-medium text-xs flex items-center gap-2 shadow-lg backdrop-blur animate-fade-in">
                     <ShieldAlert className="h-4 w-4 shrink-0" />
                     <span>Please watch the lecture to advance forward. Fast-forwarding is restricted until completed.</span>
                   </div>
@@ -462,7 +496,7 @@ export default function LearningPlayer() {
 
                 {/* Completion Toast */}
                 {unlockedSuccess && (
-                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium text-xs flex items-center gap-2 shadow-lg animate-fade-in">
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium text-xs flex items-center gap-2 shadow-lg animate-fade-in">
                     <Sparkles className="h-4 w-4 shrink-0" />
                     <span>Lecture completed! Advancing to the next lesson...</span>
                   </div>
@@ -557,68 +591,64 @@ export default function LearningPlayer() {
               </div>
             )}
 
-            {/* 📄 3. DOCUMENT / PDF VIEWER */}
+            {/* 📄 3. DOCUMENT / PDF VIEWER (Auto-download disabled; downloaded only on explicit user click) */}
             {(currentLesson?.type === 'DOCUMENT' || currentLesson?.type === 'PDF') && (
-              <div className="rounded-xl overflow-hidden bg-slate-900 border border-slate-800/80 p-6 sm:p-8 space-y-6">
-                {isPdfDocument && resolvedMediaUrl ? (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-800">
-                      <div className="flex items-center gap-2.5">
-                        <File className="h-5 w-5 text-rose-500 shrink-0" />
-                        <div>
-                          <p className="text-sm font-semibold text-slate-200">
-                            {currentLesson.documentName || 'Document Reading Material'}
-                          </p>
-                          <p className="text-[11px] text-slate-400">PDF Document Reference</p>
-                        </div>
-                      </div>
-
-                      <a
-                        href={resolvedMediaUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        <span>Open in New Tab</span>
-                      </a>
-                    </div>
-
-                    <div className="w-full h-[62vh] rounded-lg overflow-hidden border border-slate-800 bg-slate-950">
-                      <iframe
-                        src={resolvedMediaUrl}
-                        title={currentLesson.title}
-                        className="w-full h-full"
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="py-12 flex flex-col items-center text-center max-w-md mx-auto space-y-4">
-                    <div className="p-4 rounded-2xl bg-slate-800/80 border border-slate-700/60 text-indigo-400">
-                      <File className="h-12 w-12" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-semibold text-slate-100">
-                        {currentLesson?.documentName || currentLesson?.title}
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-1">
-                        Course Reference Document & Handout
-                      </p>
-                    </div>
-
-                    {resolvedMediaUrl && (
-                      <a
-                        href={resolvedMediaUrl}
-                        download
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-md transition-colors"
-                      >
-                        <Download className="h-4 w-4" /> Download Document
-                      </a>
+              <div className="rounded-xl overflow-hidden bg-slate-900 border border-slate-800/80 p-6 sm:p-10 space-y-6">
+                <div className="py-8 flex flex-col items-center text-center max-w-lg mx-auto space-y-5">
+                  <div
+                    className={cn(
+                      'p-5 rounded-2xl border shadow-lg',
+                      isPdfDocument
+                        ? 'bg-rose-950/30 border-rose-800/50 text-rose-400'
+                        : 'bg-slate-800/80 border-slate-700/60 text-indigo-400'
+                    )}
+                  >
+                    {isPdfDocument ? (
+                      <FileText className="h-14 w-14" />
+                    ) : (
+                      <File className="h-14 w-14" />
                     )}
                   </div>
-                )}
+                  <div>
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-semibold uppercase tracking-wider mb-2 border border-slate-700 bg-slate-800 text-slate-300">
+                      {isPdfDocument
+                        ? 'PDF Document'
+                        : currentLesson?.documentName?.split('.').pop()?.toUpperCase() || 'Document'}
+                    </div>
+                    <h3 className="text-lg font-bold text-slate-100">
+                      {currentLesson?.documentName || currentLesson?.title}
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-1.5 max-w-sm">
+                      {isPdfDocument
+                        ? 'Course PDF reference document. Click below to download or view in a new tab.'
+                        : 'Course reference document & handout. Click below to download the resource.'}
+                    </p>
+                  </div>
+
+                  {resolvedMediaUrl && (
+                    <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                      <a
+                        href={resolvedMediaUrl}
+                        download={currentLesson?.documentName || (isPdfDocument ? 'document.pdf' : 'document')}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-md transition-all hover:scale-[1.02]"
+                      >
+                        <Download className="h-4 w-4" /> Download {isPdfDocument ? 'PDF' : 'Document'}
+                      </a>
+                      {isPdfDocument && (
+                        <a
+                          href={resolvedMediaUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors"
+                        >
+                          <ExternalLink className="h-4 w-4" /> Open in New Tab
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -748,8 +778,8 @@ export default function LearningPlayer() {
 
         {/* ── Curriculum Playlist (Sidebar) ──────────────── */}
         {sidebarOpen && (
-          <aside className="hidden lg:flex flex-col w-[360px] border-l border-slate-800 bg-slate-900 overflow-y-auto">
-            <div className="p-4 border-b border-slate-800 bg-slate-900/90 sticky top-0 z-10 backdrop-blur">
+          <aside className="hidden lg:flex flex-col w-[360px] border-l border-slate-800 bg-slate-900 overflow-hidden">
+            <div className="p-4 border-b border-slate-800 bg-slate-900 shrink-0">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
                   Course Curriculum

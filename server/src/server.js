@@ -45,6 +45,7 @@ export const io = new SocketIOServer(server, {
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   },
 });
+app.set('io', io);
 
 import { authenticateSocket, registerSocketHandlers } from './utils/socketAuth.js';
 

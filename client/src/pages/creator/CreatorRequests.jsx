@@ -27,7 +27,14 @@ export default function CreatorRequests() {
   const fetchQueue = useCallback(async () => {
     try {
       const { data } = await api.get('/enrollments/creator-queue');
-      setRequests(data.requests || []);
+      const queueList = data.requests || [];
+      setRequests(queueList);
+      if (queueList.length === 0) {
+        api.patch('/notifications/read-by-link', { link: '/creator/requests', type: 'ENROLLMENT_REQUEST' }).catch(() => {});
+        window.dispatchEvent(new CustomEvent('notifications_clear_queue', {
+          detail: { link: '/creator/requests', type: 'ENROLLMENT_REQUEST' },
+        }));
+      }
     } catch (err) {
       console.error('Failed to load queue:', err);
     } finally {
@@ -51,7 +58,16 @@ export default function CreatorRequests() {
     };
     const handleResolved = (data) => {
       if (data?.requestId) {
-        setRequests((prev) => prev.filter((r) => r.id !== data.requestId));
+        setRequests((prev) => {
+          const next = prev.filter((r) => r.id !== data.requestId);
+          if (next.length === 0) {
+            api.patch('/notifications/read-by-link', { link: '/creator/requests', type: 'ENROLLMENT_REQUEST' }).catch(() => {});
+            window.dispatchEvent(new CustomEvent('notifications_clear_queue', {
+              detail: { link: '/creator/requests', type: 'ENROLLMENT_REQUEST' },
+            }));
+          }
+          return next;
+        });
       } else {
         fetchQueue();
       }
@@ -75,7 +91,19 @@ export default function CreatorRequests() {
         creatorRecommendation: recommendation,
       });
       setEndorseModal({ open: false, req: null });
-      setRequests((prev) => prev.filter((r) => r.id !== targetId));
+      setRequests((prev) => {
+        const remaining = prev.filter((r) => r.id !== targetId);
+        if (remaining.length === 0) {
+          api.patch('/notifications/read-by-link', { link: '/creator/requests', type: 'ENROLLMENT_REQUEST' }).catch(() => {});
+          window.dispatchEvent(new CustomEvent('notifications_clear_queue', {
+            detail: { link: '/creator/requests', type: 'ENROLLMENT_REQUEST' },
+          }));
+        }
+        return remaining;
+      });
+      window.dispatchEvent(new CustomEvent('notification_request_completed', {
+        detail: { requestId: targetId },
+      }));
       addToast({
         type: 'success',
         title: 'Application Endorsed',
@@ -99,6 +127,19 @@ export default function CreatorRequests() {
     if (!reason) return;
     try {
       await api.patch(`/enrollments/${reqId}/reject`, { rejectionReason: reason });
+      setRequests((prev) => {
+        const remaining = prev.filter((r) => r.id !== reqId);
+        if (remaining.length === 0) {
+          api.patch('/notifications/read-by-link', { link: '/creator/requests', type: 'ENROLLMENT_REQUEST' }).catch(() => {});
+          window.dispatchEvent(new CustomEvent('notifications_clear_queue', {
+            detail: { link: '/creator/requests', type: 'ENROLLMENT_REQUEST' },
+          }));
+        }
+        return remaining;
+      });
+      window.dispatchEvent(new CustomEvent('notification_request_completed', {
+        detail: { requestId: reqId },
+      }));
       addToast({
         type: 'info',
         title: 'Application Declined',

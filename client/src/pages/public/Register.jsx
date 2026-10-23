@@ -56,6 +56,8 @@ export default function Register() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState(false);
+  const [regRequiresOtp, setRegRequiresOtp] = useState(false);
+  const [regCooldown, setRegCooldown] = useState(0);
 
   const departments = [
     'Engineering',
@@ -125,6 +127,15 @@ export default function Register() {
     return () => clearTimeout(timer);
   }, [googleOnboarding.cooldown]);
 
+  // Countdown timer for registration OTP resend cooldown
+  useEffect(() => {
+    let timer;
+    if (regCooldown > 0) {
+      timer = setTimeout(() => setRegCooldown((c) => c - 1), 1000);
+    }
+    return () => clearTimeout(timer);
+  }, [regCooldown]);
+
   // Handle incoming redirect from Login page with Google onboarding state
   useEffect(() => {
     if (location.state?.googleOnboarding) {
@@ -174,18 +185,22 @@ export default function Register() {
         role: googleOnboarding.role,
         department: googleOnboarding.department,
       });
-      if (res.requiresOtp) {
+      if (res?.pendingApproval) {
+        setPendingConfirmation(true);
+        return;
+      }
+      if (res?.requiresOtp) {
         setGoogleOnboarding((prev) => ({
           ...prev,
           step: 'OTP',
           loading: false,
           cooldown: 60,
         }));
-      } else if (res.user) {
+      } else if (res?.user) {
         redirectByRole(res.user.role);
       }
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to dispatch verification code.');
+      setError(err.response?.data?.message || err.message || 'Failed to complete Google onboarding.');
       setGoogleOnboarding((prev) => ({ ...prev, loading: false }));
     }
   };
@@ -244,22 +259,79 @@ export default function Register() {
     setLoading(true);
 
     try {
-      const res = await register({
+      if (!regRequiresOtp) {
+        // Stage 1: Initiate registration and dispatch OTP
+        const res = await register({
+          name: formData.name,
+          email: formData.email,
+          password: formData.password,
+          department: formData.department,
+          role: formData.role,
+        });
+
+        if (res?.requiresOtp) {
+          setRegRequiresOtp(true);
+          setRegCooldown(60);
+          return;
+        }
+
+        if (res?.pendingApproval) {
+          setPendingConfirmation(true);
+          return;
+        }
+
+        if (res?.user) {
+          redirectByRole(formData.role);
+          return;
+        }
+      } else {
+        // Stage 2: Submit OTP verification passcode
+        if (!formData.otp || formData.otp.trim().length !== 6) {
+          setError('Please enter the complete 6-digit verification code.');
+          return;
+        }
+
+        const res = await register({
+          name: formData.name,
+          email: formData.email,
+          password: formData.password,
+          department: formData.department,
+          role: formData.role,
+          otp: formData.otp.trim(),
+        });
+
+        if (res?.pendingApproval) {
+          setPendingConfirmation(true);
+          return;
+        }
+
+        if (res?.user) {
+          redirectByRole(formData.role);
+          return;
+        }
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Registration failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendRegistrationOtp = async () => {
+    if (regCooldown > 0) return;
+    setError(null);
+    setLoading(true);
+    try {
+      await register({
         name: formData.name,
         email: formData.email,
         password: formData.password,
         department: formData.department,
         role: formData.role,
       });
-
-      if (res?.pendingApproval) {
-        setPendingConfirmation(true);
-        return;
-      }
-
-      redirectByRole(formData.role);
+      setRegCooldown(60);
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Registration failed.');
+      setError(err.response?.data?.message || 'Could not resend code. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -453,7 +525,7 @@ export default function Register() {
                   <div className="p-3.5 bg-blue-50/60 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800/60 rounded-btn text-xs text-blue-800 dark:text-blue-300 flex items-start gap-2.5">
                     <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5 text-blue-600 dark:text-blue-400" />
                     <span>
-                      To verify ownership and role provisioning, a 6-digit one-time passcode will be sent to your Google corporate email.
+                      Google corporate identity verified. Please confirm your target operational role to complete account provisioning.
                     </span>
                   </div>
 
@@ -464,7 +536,7 @@ export default function Register() {
                     className="w-full mt-2 shadow-sm"
                     rightIcon={<ArrowRight className="h-4 w-4" />}
                   >
-                    Send Verification Passcode
+                    {googleOnboarding.role === 'MODERATOR' ? 'Submit Role Request' : 'Complete Google Account Setup'}
                   </Button>
 
                   <div className="text-center pt-2">
@@ -706,7 +778,7 @@ export default function Register() {
                 </form>
               )}
 
-              {/* STEP 3: Summary & Confirmation */}
+              {/* STEP 3: Verification & Activation */}
               {step === 3 && (
                 <form onSubmit={handleCompleteRegistration} className="space-y-4 animate-fade-in">
                   <div className="p-4 rounded-btn bg-elevated border border-app space-y-2 text-xs">
@@ -730,20 +802,64 @@ export default function Register() {
                     </div>
                   </div>
 
-                  {formData.role === 'MODERATOR' ? (
-                    <div className="p-3.5 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-btn text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
-                      <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
-                      <span>
-                        Moderator role requests are routed to Platform Administrators for identity verification and permission allocation prior to access activation.
-                      </span>
+                  {regRequiresOtp ? (
+                    <div className="space-y-4 pt-1 animate-fade-in">
+                      <div className="p-3 bg-slate-50 dark:bg-dark-elevated rounded-btn border border-app flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-full bg-brand-500/10 text-brand-600 dark:text-brand-400 flex items-center justify-center shrink-0">
+                          <ShieldCheck className="h-4 w-4" />
+                        </div>
+                        <div className="text-xs">
+                          <span className="text-app-muted block">Passcode dispatched to:</span>
+                          <span className="font-mono font-bold text-app truncate block">{formData.email}</span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-xs font-semibold text-app select-none">
+                          6-Digit Verification Code
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          placeholder="••••••"
+                          value={formData.otp}
+                          onChange={(e) =>
+                            setFormData((prev) => ({ ...prev, otp: e.target.value.replace(/\D/g, '') }))
+                          }
+                          className="w-full text-center tracking-[10px] font-mono text-2xl font-black h-12 rounded-btn border border-slate-300 dark:border-dark-border bg-white dark:bg-dark-elevated text-app focus:border-brand-500 focus:ring-1 focus:ring-brand-500 shadow-xs placeholder:text-slate-400 dark:placeholder:text-slate-600"
+                          autoFocus
+                          required
+                        />
+                        <div className="flex items-center justify-between text-[11px] pt-1">
+                          <span className="text-app-muted">Code valid for 10 minutes.</span>
+                          <button
+                            type="button"
+                            onClick={handleResendRegistrationOtp}
+                            disabled={regCooldown > 0}
+                            className="text-brand-600 dark:text-brand-400 font-semibold hover:underline disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                            <span>{regCooldown > 0 ? `Resend (${regCooldown}s)` : 'Resend Code'}</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   ) : (
-                    <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-btn text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-2.5">
-                      <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" />
-                      <span>
-                        Zero-Trust Dual-Token security and audit logging will be activated for this profile upon creation.
-                      </span>
-                    </div>
+                    formData.role === 'MODERATOR' ? (
+                      <div className="p-3.5 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-btn text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2.5">
+                        <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                        <span>
+                          To verify ownership and protect system integrity, a 6-digit one-time passcode will be dispatched to your email address before submission.
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="p-3.5 bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 rounded-btn text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-2.5">
+                        <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" />
+                        <span>
+                          A 6-digit one-time passcode will be dispatched to your email address to verify mailbox ownership and activate your profile.
+                        </span>
+                      </div>
+                    )
                   )}
 
                   <div className="flex items-center gap-3 pt-2">
@@ -751,7 +867,14 @@ export default function Register() {
                       type="button"
                       variant="outline"
                       size="lg"
-                      onClick={() => setStep(2)}
+                      onClick={() => {
+                        if (regRequiresOtp) {
+                          setRegRequiresOtp(false);
+                          setFormData((prev) => ({ ...prev, otp: '' }));
+                        } else {
+                          setStep(2);
+                        }
+                      }}
                       leftIcon={<ArrowLeft className="h-4 w-4" />}
                       className="w-1/3"
                     >
@@ -764,7 +887,9 @@ export default function Register() {
                       className="w-2/3"
                       rightIcon={<CheckCircle2 className="h-4 w-4" />}
                     >
-                      {formData.role === 'MODERATOR' ? 'Submit Role Request' : 'Create Account'}
+                      {regRequiresOtp
+                        ? (formData.role === 'MODERATOR' ? 'Verify & Submit Request' : 'Verify & Create Account')
+                        : 'Send Verification Code'}
                     </Button>
                   </div>
                 </form>

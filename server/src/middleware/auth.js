@@ -29,12 +29,20 @@ export async function authenticateToken(req, res, next) {
       });
     }
 
-    jwt.verify(token, secret, async (err, decoded) => {
+    jwt.verify(token, secret, { algorithms: ['HS256'] }, async (err, decoded) => {
       if (err) {
         return res.status(401).json({
           success: false,
           error: 'AUTH_TOKEN_EXPIRED_OR_INVALID',
           message: 'Access token expired or invalid. Please refresh token.',
+        });
+      }
+
+      if (decoded.purpose && decoded.purpose === 'PASSWORD_RESET') {
+        return res.status(401).json({
+          success: false,
+          error: 'INVALID_TOKEN_PURPOSE',
+          message: 'Password reset token cannot be used for general API access.',
         });
       }
 
@@ -59,6 +67,14 @@ export async function authenticateToken(req, res, next) {
           success: false,
           error: 'USER_NOT_FOUND',
           message: 'User account not found.',
+        });
+      }
+
+      if (user.status === 'PENDING_VERIFICATION') {
+        return res.status(403).json({
+          success: false,
+          error: 'ACCOUNT_UNVERIFIED',
+          message: 'Account email has not been verified. Please complete registration verification.',
         });
       }
 
@@ -118,7 +134,7 @@ export async function optionalAuthenticateToken(req, res, next) {
       return next();
     }
 
-    jwt.verify(token, secret, async (err, decoded) => {
+    jwt.verify(token, secret, { algorithms: ['HS256'] }, async (err, decoded) => {
       if (err || !decoded?.sub) {
         req.user = null;
         return next();

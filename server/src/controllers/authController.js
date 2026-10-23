@@ -5,7 +5,6 @@ import { z } from 'zod';
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { sendOtpEmail, sendWelcomeEmail } from '../utils/email.js';
-import { io } from '../server.js';
 
 function getAccessSecret() {
   return process.env.JWT_ACCESS_SECRET || process.env.JWT_SECRET;
@@ -33,7 +32,7 @@ function generateAccessToken(user) {
       department: user.department,
     },
     secret,
-    { expiresIn: ACCESS_TOKEN_EXPIRES }
+    { algorithm: 'HS256', expiresIn: ACCESS_TOKEN_EXPIRES }
   );
 }
 
@@ -49,7 +48,23 @@ function generateRefreshToken(user) {
       jti: crypto.randomUUID(),
     },
     secret,
-    { expiresIn: `${REFRESH_TOKEN_EXPIRES_DAYS}d` }
+    { algorithm: 'HS256', expiresIn: `${REFRESH_TOKEN_EXPIRES_DAYS}d` }
+  );
+}
+
+function generateResetToken(user) {
+  const secret = getAccessSecret();
+  if (!secret) {
+    throw new Error('JWT_ACCESS_SECRET is not configured on the server.');
+  }
+  return jwt.sign(
+    {
+      sub: user.id,
+      email: user.email,
+      purpose: 'PASSWORD_RESET',
+    },
+    secret,
+    { algorithm: 'HS256', expiresIn: '15m' }
   );
 }
 
@@ -64,6 +79,7 @@ function setRefreshTokenCookie(res, refreshToken) {
     secure: isProd,
     sameSite: isProd ? 'none' : 'lax',
     path: '/',
+    maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000,
   });
 }
 
@@ -83,6 +99,7 @@ const registerSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters'),
   department: z.string().optional(),
   role: z.enum(['MODERATOR', 'COURSE_CREATOR', 'USER']).optional().default('USER'),
+  otp: z.string().optional(),
 });
 
 const loginSchema = z.object({
@@ -90,7 +107,7 @@ const loginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 });
 
-// 1. User Registration
+// 1. User Registration with Mandatory OTP Verification
 export async function register(req, res) {
   try {
     // Explicit security guard: Reject any attempt to self-assign ADMIN privileges
@@ -112,37 +129,138 @@ export async function register(req, res) {
       });
     }
 
-    const { name, email, password, department, role } = parseResult.data;
+    const { name, email, password, department, role, otp } = parseResult.data;
+    const normalizedEmail = email.toLowerCase().trim();
 
     const existingUser = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { email: normalizedEmail },
     });
-
-    if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        error: 'EMAIL_ALREADY_REGISTERED',
-        message: 'An account with this email address already exists.',
-      });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
 
     const isModeratorRequest = role === 'MODERATOR';
     const isElevatedRoleRequest = role === 'MODERATOR' || role === 'COURSE_CREATOR';
-    const initialStatus = isElevatedRoleRequest ? 'PENDING_APPROVAL' : 'ACTIVE';
-    // Elevated roles are held in requestedRole until verified by an Administrator
+    const targetStatus = isElevatedRoleRequest ? 'PENDING_APPROVAL' : 'ACTIVE';
     const initialRole = isElevatedRoleRequest ? 'USER' : (role || 'USER');
 
-    const newUser = await prisma.user.create({
+    // ── STAGE 1: INITIATE REGISTRATION & DISPATCH OTP ──
+    if (!otp) {
+      if (existingUser && existingUser.status !== 'PENDING_VERIFICATION') {
+        return res.status(409).json({
+          success: false,
+          error: 'EMAIL_ALREADY_REGISTERED',
+          message: 'An account with this email address already exists.',
+        });
+      }
+
+      const generatedOtp = crypto.randomInt(100000, 999999).toString();
+      const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      if (existingUser && existingUser.status === 'PENDING_VERIFICATION') {
+        // Enforce 30-second cooldown on OTP regeneration
+        if (existingUser.otpExpires) {
+          const remainingMs = new Date(existingUser.otpExpires).getTime() - Date.now();
+          const elapsedMs = 10 * 60 * 1000 - remainingMs;
+          if (elapsedMs < 30000 && elapsedMs > 0) {
+            return res.status(429).json({
+              success: false,
+              error: 'RATE_LIMIT_EXCEEDED',
+              message: 'Please wait at least 30 seconds before requesting a new registration verification code.',
+            });
+          }
+        }
+
+        await prisma.user.update({
+          where: { id: existingUser.id },
+          data: {
+            name,
+            passwordHash,
+            department: department || 'General',
+            role: initialRole,
+            requestedRole: isElevatedRoleRequest ? role : null,
+            otpCode: hashToken(generatedOtp),
+            otpExpires,
+          },
+        });
+      } else {
+        await prisma.user.create({
+          data: {
+            name,
+            email: normalizedEmail,
+            passwordHash,
+            department: department || 'General',
+            role: initialRole,
+            status: 'PENDING_VERIFICATION',
+            requestedRole: isElevatedRoleRequest ? role : null,
+            otpCode: hashToken(generatedOtp),
+            otpExpires,
+          },
+        });
+      }
+
+      const emailResult = await sendOtpEmail(normalizedEmail, generatedOtp, name, 'Registration Verification');
+      if (!emailResult.delivered && process.env.NODE_ENV === 'production') {
+        logger.error(`Registration OTP delivery failed in production for: ${normalizedEmail} (${emailResult.error})`);
+        return res.status(503).json({
+          success: false,
+          error: 'EMAIL_DELIVERY_FAILED',
+          message: 'Unable to deliver verification code. Email delivery service is not configured or unavailable.',
+        });
+      }
+
+      logger.info(`Registration OTP dispatched for: ${normalizedEmail}`);
+
+      return res.status(200).json({
+        success: true,
+        requiresOtp: true,
+        email: normalizedEmail,
+        message: 'A 6-digit verification code has been dispatched to your email address.',
+      });
+    }
+
+    // ── STAGE 2: COMPLETE REGISTRATION VIA OTP VERIFICATION ──
+    const cleanOtp = String(otp).trim();
+
+    if (!existingUser || !existingUser.otpCode || !existingUser.otpExpires) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_OTP_REQUEST',
+        message: 'No pending registration found for this email address. Please initiate registration first.',
+      });
+    }
+
+    if (existingUser.status !== 'PENDING_VERIFICATION') {
+      return res.status(409).json({
+        success: false,
+        error: 'EMAIL_ALREADY_REGISTERED',
+        message: 'This account has already completed verification. Please sign in.',
+      });
+    }
+
+    if (new Date() > new Date(existingUser.otpExpires)) {
+      return res.status(400).json({
+        success: false,
+        error: 'OTP_EXPIRED',
+        message: 'Verification code has expired. Please request a new code.',
+      });
+    }
+
+    const providedHash = hashToken(cleanOtp);
+    if (providedHash !== existingUser.otpCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_OTP_CODE',
+        message: 'Incorrect verification code. Please check and try again.',
+      });
+    }
+
+    // OTP Verified: Invalidate OTP (single-use) and transition account to active/pending status
+    const verifiedUser = await prisma.user.update({
+      where: { id: existingUser.id },
       data: {
-        name,
-        email: email.toLowerCase(),
-        passwordHash,
-        department: department || 'General',
-        role: initialRole,
-        status: initialStatus,
-        requestedRole: isElevatedRoleRequest ? role : null,
+        status: targetStatus,
+        otpCode: null,
+        otpExpires: null,
+        lastActive: new Date(),
       },
       select: {
         id: true,
@@ -159,14 +277,14 @@ export async function register(req, res) {
 
     await prisma.auditLog.create({
       data: {
-        actorId: newUser.id,
-        actorEmail: newUser.email,
-        actorName: newUser.name,
-        action: 'USER_REGISTERED',
+        actorId: verifiedUser.id,
+        actorEmail: verifiedUser.email,
+        actorName: verifiedUser.name,
+        action: 'USER_REGISTERED_OTP_VERIFIED',
         resource: 'USER',
         details: isElevatedRoleRequest
-          ? `User registered requesting ${role} privileges. Awaiting Administrator verification and permission setup.`
-          : `User registered with role ${newUser.role}`,
+          ? `User verified email OTP and requested ${role} privileges. Awaiting Administrator approval.`
+          : `User verified email OTP and registered with role ${verifiedUser.role}`,
         ipAddress: req.ip,
         riskLevel: isElevatedRoleRequest ? 'MEDIUM' : 'LOW',
       },
@@ -178,7 +296,7 @@ export async function register(req, res) {
           data: {
             targetRole: 'ADMIN',
             title: '🛡️ Moderator Role Request',
-            message: `${newUser.name} (${newUser.email}) requested Moderator privileges. Administrator verification and permission setup is required.`,
+            message: `${verifiedUser.name} (${verifiedUser.email}) verified their email and requested Moderator privileges. Administrator verification and permission setup is required.`,
             type: 'SYSTEM',
             link: '/admin/approvals?tab=moderators',
           },
@@ -186,7 +304,7 @@ export async function register(req, res) {
         if (io) {
           io.to('role_ADMIN').emit('system_notification', {
             title: '🛡️ Moderator Role Request',
-            message: `${newUser.name} requested Moderator access.`,
+            message: `${verifiedUser.name} requested Moderator access.`,
             type: 'SYSTEM',
             link: '/admin/approvals?tab=moderators',
           });
@@ -194,9 +312,9 @@ export async function register(req, res) {
             requestType: 'MODERATOR_REGISTRATION',
             type: 'MODERATOR_REGISTRATION',
             title: 'Moderator Request',
-            user: newUser,
-            userId: newUser.id,
-            message: `${newUser.name} requested Moderator access.`,
+            user: verifiedUser,
+            userId: verifiedUser.id,
+            message: `${verifiedUser.name} requested Moderator access.`,
           });
         }
       } catch (notifErr) {
@@ -206,13 +324,17 @@ export async function register(req, res) {
       return res.status(201).json({
         success: true,
         pendingApproval: true,
-        message: 'Your account has been registered. Moderator privileges require administrator verification and permission assignment before activation.',
-        user: newUser,
+        message: 'Your email has been verified and your account registered. Moderator privileges require administrator verification before activation.',
+        user: verifiedUser,
       });
     }
 
-    const accessToken = generateAccessToken(newUser);
-    const refreshToken = generateRefreshToken(newUser);
+    sendWelcomeEmail(verifiedUser.email, verifiedUser.name, verifiedUser.role).catch((welcomeErr) => {
+      logger.warn(`Could not dispatch welcome email to ${verifiedUser.email}: ${welcomeErr.message}`);
+    });
+
+    const accessToken = generateAccessToken(verifiedUser);
+    const refreshToken = generateRefreshToken(verifiedUser);
     const refreshTokenHash = hashToken(refreshToken);
 
     const expiresAt = new Date();
@@ -220,7 +342,7 @@ export async function register(req, res) {
 
     await prisma.activeSession.create({
       data: {
-        userId: newUser.id,
+        userId: verifiedUser.id,
         refreshTokenHash,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'] || 'Unknown',
@@ -230,12 +352,12 @@ export async function register(req, res) {
 
     setRefreshTokenCookie(res, refreshToken);
 
-    logger.info(`User Registered successfully: ${newUser.email} (${newUser.role})`);
+    logger.info(`User Registered & Verified successfully: ${verifiedUser.email} (${verifiedUser.role})`);
 
     return res.status(201).json({
       success: true,
-      message: 'Account created successfully.',
-      user: newUser,
+      message: 'Account verified and created successfully.',
+      user: verifiedUser,
       accessToken,
     });
   } catch (error) {
@@ -248,7 +370,7 @@ export async function register(req, res) {
   }
 }
 
-// 2. User Login with Brute-Force Lockout
+// 2. User Login with Brute-Force Lockout (Direct Login without OTP)
 export async function login(req, res) {
   try {
     const parseResult = loginSchema.safeParse(req.body);
@@ -261,7 +383,7 @@ export async function login(req, res) {
     }
 
     const { email, password } = parseResult.data;
-    const normalizedEmail = email.toLowerCase();
+    const normalizedEmail = email.toLowerCase().trim();
 
     const user = await prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -294,6 +416,14 @@ export async function login(req, res) {
         user.status = 'ACTIVE';
         user.failedLoginAttempts = 0;
       }
+    }
+
+    if (user.status === 'PENDING_VERIFICATION') {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCOUNT_UNVERIFIED',
+        message: 'Your account email has not been verified. Please complete verification using the code dispatched to your email.',
+      });
     }
 
     if (user.status === 'SUSPENDED') {
@@ -365,46 +495,77 @@ export async function login(req, res) {
       });
     }
 
-    // Password Valid: Generate 6-Digit OTP for mandatory 2FA verification
-    const otp = crypto.randomInt(100000, 999999).toString();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
+    // Password Valid: Reset failed login attempts and lockout timestamps
     await prisma.user.update({
       where: { id: user.id },
       data: {
         failedLoginAttempts: 0,
         lockUntil: null,
-        otpCode: hashToken(otp),
-        otpExpires,
+        lastActive: new Date(),
       },
     });
 
-    // Dispatch Live 6-Digit Passcode via SMTP
-    const emailResult = await sendOtpEmail(user.email, otp, user.name, 'Sign In');
-    if (!emailResult.delivered) {
-      if (process.env.NODE_ENV === 'production') {
-        logger.error(`Login 2FA OTP delivery failed in production for: ${user.email} (${emailResult.error})`);
-        return res.status(503).json({
-          success: false,
-          error: 'EMAIL_DELIVERY_FAILED',
-          message: 'Authentication failed: Email delivery service is not configured or unavailable. Please contact an administrator.',
-        });
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+    const refreshTokenHash = hashToken(refreshToken);
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+
+    await prisma.activeSession.create({
+      data: {
+        userId: user.id,
+        refreshTokenHash,
+        ipAddress: req.ip || '127.0.0.1',
+        userAgent: req.headers['user-agent'] || 'Direct Login Session',
+        expiresAt,
+      },
+    });
+
+    setRefreshTokenCookie(res, refreshToken);
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorEmail: user.email,
+        actorName: user.name,
+        action: 'USER_LOGIN_SUCCESS',
+        resource: 'AUTH',
+        details: 'User authenticated successfully via email and password.',
+        ipAddress: req.ip || '127.0.0.1',
+        riskLevel: 'LOW',
+      },
+    });
+
+    let parsedPerms = null;
+    if (user.moderatorPermissions) {
+      try {
+        parsedPerms = typeof user.moderatorPermissions === 'string'
+          ? JSON.parse(user.moderatorPermissions)
+          : user.moderatorPermissions;
+      } catch {
+        parsedPerms = null;
       }
     }
 
-    logger.info(`Login 2FA OTP generated for: ${user.email} (Delivered: ${Boolean(emailResult.delivered)}, Simulated: ${Boolean(emailResult.simulated)})`);
+    logger.info(`User logged in directly without OTP: ${user.email} (${user.role})`);
 
     return res.status(200).json({
       success: true,
-      requiresOtp: true,
-      email: user.email,
-      mustChangePassword: Boolean(user.mustChangePassword),
-      simulatedEmail: Boolean(emailResult.simulated),
-      message: emailResult.delivered
-        ? (user.mustChangePassword
-            ? `Temporary credentials detected. A 6-digit verification code has been dispatched to ${user.email}.`
-            : `A 6-digit verification code has been dispatched to ${user.email}.`)
-        : `[Dev Mode] Verification code generated (SMTP not configured, passcode logged to server console).`,
+      message: 'Authentication successful.',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        department: user.department,
+        avatar: user.avatar,
+        mustChangePassword: Boolean(user.mustChangePassword),
+        requestedRole: user.requestedRole,
+        moderatorPermissions: parsedPerms,
+      },
+      accessToken,
     });
   } catch (error) {
     logger.error(`Login Controller Error: ${error.message}`, { stack: error.stack });
@@ -510,13 +671,13 @@ export async function demoLogin(req, res) {
 // 4. Dual-Token Rotation
 export async function refresh(req, res) {
   try {
-    const rawRefreshToken = req.cookies?.esmms_refresh_token;
+    const rawRefreshToken = req.cookies?.esmms_refresh_token || req.body?.refreshToken;
 
     if (!rawRefreshToken) {
       return res.status(401).json({
         success: false,
         error: 'REFRESH_TOKEN_REQUIRED',
-        message: 'No refresh token provided in cookies.',
+        message: 'No refresh token provided in cookies or request body.',
       });
     }
 
@@ -532,7 +693,7 @@ export async function refresh(req, res) {
 
     let decoded;
     try {
-      decoded = jwt.verify(rawRefreshToken, refreshSecret);
+      decoded = jwt.verify(rawRefreshToken, refreshSecret, { algorithms: ['HS256'] });
     } catch {
       return res.status(401).json({
         success: false,
@@ -640,12 +801,19 @@ export async function refresh(req, res) {
 // 5. User Logout
 export async function logout(req, res) {
   try {
-    const rawRefreshToken = req.cookies?.esmms_refresh_token;
+    const rawRefreshToken = req.cookies?.esmms_refresh_token || req.body?.refreshToken;
 
     if (rawRefreshToken) {
       const incomingHash = hashToken(rawRefreshToken);
       await prisma.activeSession.updateMany({
         where: { refreshTokenHash: incomingHash },
+        data: { isRevoked: true },
+      });
+    }
+
+    if (req.user?.id) {
+      await prisma.activeSession.updateMany({
+        where: { userId: req.user.id },
         data: { isRevoked: true },
       });
     }
@@ -797,56 +965,75 @@ export async function updateProfile(req, res) {
   }
 }
 
-// 7. Request 2FA OTP
+// 7. Request OTP (Supports Registration & Password Reset with Anti-Enumeration & Rate Limiting)
 export async function requestOtp(req, res) {
   try {
-    const { email } = req.body;
+    const { email, purpose } = req.body || {};
+    const cleanEmail = String(email || '').trim().toLowerCase();
+
+    if (!cleanEmail) {
+      return res.status(400).json({
+        success: false,
+        error: 'EMAIL_REQUIRED',
+        message: 'A valid email address is required.',
+      });
+    }
+
     const user = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() },
+      where: { email: cleanEmail },
     });
 
+    // Anti-enumeration: Return generic success if user does not exist
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: 'USER_NOT_FOUND',
-        message: 'No account with this email address was found.',
+      return res.status(200).json({
+        success: true,
+        message: 'If an account is associated with this email address, a verification code has been dispatched.',
       });
+    }
+
+    // Rate limiting: Require at least 30 seconds between OTP requests
+    if (user.otpExpires) {
+      const remainingMs = new Date(user.otpExpires).getTime() - Date.now();
+      const elapsedMs = 10 * 60 * 1000 - remainingMs;
+      if (elapsedMs < 30000 && elapsedMs > 0) {
+        return res.status(429).json({
+          success: false,
+          error: 'RATE_LIMIT_EXCEEDED',
+          message: 'Please wait at least 30 seconds before requesting another verification code.',
+        });
+      }
     }
 
     const otp = crypto.randomInt(100000, 999999).toString();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    const isPasswordReset = purpose === 'PASSWORD_RESET' || user.status !== 'PENDING_VERIFICATION';
 
     await prisma.user.update({
       where: { id: user.id },
       data: {
         otpCode: hashToken(otp),
         otpExpires,
+        ...(isPasswordReset ? { passwordResetRequested: true, passwordResetRequestedAt: new Date() } : {}),
       },
     });
 
-    // Dispatch live email via SMTP
-    const emailResult = await sendOtpEmail(user.email, otp, user.name);
-    if (!emailResult.delivered) {
-      if (process.env.NODE_ENV === 'production') {
-        logger.error(`Password reset OTP delivery failed in production for: ${user.email} (${emailResult.error})`);
-        return res.status(503).json({
-          success: false,
-          error: 'EMAIL_DELIVERY_FAILED',
-          message: 'Unable to deliver verification code. Email delivery service is not configured or unavailable.',
-        });
-      }
-      return res.status(200).json({
-        success: true,
-        simulatedEmail: true,
-        message: '[Dev Mode] Verification code generated (SMTP not configured, passcode logged to server console).',
+    const emailContext = user.status === 'PENDING_VERIFICATION' ? 'Account Verification' : 'Password Reset';
+    const emailResult = await sendOtpEmail(user.email, otp, user.name, emailContext);
+    if (!emailResult.delivered && process.env.NODE_ENV === 'production') {
+      logger.error(`OTP delivery failed in production for: ${user.email} (${emailResult.error})`);
+      return res.status(503).json({
+        success: false,
+        error: 'EMAIL_DELIVERY_FAILED',
+        message: 'Unable to deliver verification code. Email delivery service is not configured or unavailable.',
       });
     }
 
-    logger.info(`2FA OTP generated and dispatched for ${user.email}`);
+    logger.info(`OTP generated and dispatched for ${user.email} (Context: ${emailContext})`);
 
     return res.status(200).json({
       success: true,
-      message: 'One-time verification code has been dispatched to your email.',
+      message: 'A verification code has been dispatched to your email address.',
     });
   } catch (error) {
     logger.error(`Request OTP Error: ${error.message}`);
@@ -858,7 +1045,7 @@ export async function requestOtp(req, res) {
   }
 }
 
-// 8. Verify 2FA OTP
+// 8. Verify OTP (Registration Verification & Scoped Password Reset)
 export async function verifyOtp(req, res) {
   try {
     const { email, otp } = req.body || {};
@@ -873,7 +1060,7 @@ export async function verifyOtp(req, res) {
       return res.status(400).json({
         success: false,
         error: 'INVALID_OTP_REQUEST',
-        message: 'No active OTP request found. Please sign in again to receive a fresh code.',
+        message: 'No active OTP request found. Please request a fresh code.',
       });
     }
 
@@ -894,7 +1081,7 @@ export async function verifyOtp(req, res) {
       });
     }
 
-    // Clear used OTP and update lastActive
+    // Clear used OTP immediately for strict single-use
     await prisma.user.update({
       where: { id: user.id },
       data: {
@@ -904,85 +1091,105 @@ export async function verifyOtp(req, res) {
       },
     });
 
-    // Detect first-time login dynamically
-    const sessionCount = await prisma.activeSession.count({
-      where: { userId: user.id },
-    }).catch(() => 0);
+    // Case 1: Account Registration Verification
+    if (user.status === 'PENDING_VERIFICATION') {
+      const isElevated = user.requestedRole === 'MODERATOR' || user.requestedRole === 'COURSE_CREATOR';
+      const targetStatus = isElevated ? 'PENDING_APPROVAL' : 'ACTIVE';
 
-    if (sessionCount === 0) {
-      sendWelcomeEmail(user.email, user.name, user.role).catch((welcomeErr) => {
-        logger.warn(`Could not dispatch welcome email to ${user.email}: ${welcomeErr.message}`);
+      const verifiedUser = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          status: targetStatus,
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          status: true,
+          department: true,
+          avatar: true,
+          requestedRole: true,
+          createdAt: true,
+        },
       });
-    }
 
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
-    const refreshTokenHash = hashToken(refreshToken);
+      await prisma.auditLog.create({
+        data: {
+          actorId: verifiedUser.id,
+          actorEmail: verifiedUser.email,
+          actorName: verifiedUser.name,
+          action: 'USER_REGISTERED_OTP_VERIFIED',
+          resource: 'USER',
+          details: `User verified email OTP and activated account with role ${verifiedUser.role} (status: ${verifiedUser.status})`,
+          ipAddress: req.ip || '127.0.0.1',
+          riskLevel: isElevated ? 'MEDIUM' : 'LOW',
+        },
+      });
 
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+      if (isElevated && verifiedUser.requestedRole === 'MODERATOR') {
+        return res.status(201).json({
+          success: true,
+          pendingApproval: true,
+          message: 'Your email has been verified. Moderator privileges require administrator verification before activation.',
+          user: verifiedUser,
+        });
+      }
 
-    try {
+      sendWelcomeEmail(verifiedUser.email, verifiedUser.name, verifiedUser.role).catch((welcomeErr) => {
+        logger.warn(`Could not dispatch welcome email to ${verifiedUser.email}: ${welcomeErr.message}`);
+      });
+
+      const accessToken = generateAccessToken(verifiedUser);
+      const refreshToken = generateRefreshToken(verifiedUser);
+      const refreshTokenHash = hashToken(refreshToken);
+
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+
       await prisma.activeSession.create({
         data: {
-          userId: user.id,
+          userId: verifiedUser.id,
           refreshTokenHash,
           ipAddress: req.ip || '127.0.0.1',
-          userAgent: req.headers['user-agent'] || '2FA Session',
+          userAgent: req.headers['user-agent'] || 'Registration Session',
           expiresAt,
         },
       });
-    } catch (sessionErr) {
-      logger.warn(`ActiveSession creation note: ${sessionErr.message}`);
-    }
 
-    setRefreshTokenCookie(res, refreshToken);
-
-    try {
-      await prisma.auditLog.create({
-        data: {
-          actorId: user.id,
-          actorEmail: user.email,
-          actorName: user.name,
-          action: 'USER_LOGIN_OTP_VERIFIED',
-          resource: 'AUTH',
-          details: 'User verified 2FA OTP and signed in.',
-          ipAddress: req.ip || '127.0.0.1',
-          riskLevel: 'LOW',
-        },
-      });
-    } catch (auditErr) {
-      logger.warn(`AuditLog creation note: ${auditErr.message}`);
-    }
-
-      let parsedPerms = null;
-      if (user.moderatorPermissions) {
-        try {
-          parsedPerms = typeof user.moderatorPermissions === 'string'
-            ? JSON.parse(user.moderatorPermissions)
-            : user.moderatorPermissions;
-        } catch {
-          parsedPerms = null;
-        }
-      }
+      setRefreshTokenCookie(res, refreshToken);
 
       return res.status(200).json({
         success: true,
-        message: '2FA verification successful.',
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          status: user.status,
-          department: user.department,
-          avatar: user.avatar,
-          mustChangePassword: Boolean(user.mustChangePassword),
-          requestedRole: user.requestedRole,
-          moderatorPermissions: parsedPerms,
-        },
+        message: 'Account verified successfully.',
+        user: verifiedUser,
         accessToken,
       });
+    }
+
+    // Case 2: Password Recovery / Reset OTP Verification
+    // Issue scoped reset token only — do NOT issue a general login session
+    const resetToken = generateResetToken(user);
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorEmail: user.email,
+        actorName: user.name,
+        action: 'PASSWORD_RESET_OTP_VERIFIED',
+        resource: 'AUTH',
+        details: 'User successfully verified password reset OTP. Scoped reset token issued.',
+        ipAddress: req.ip || '127.0.0.1',
+        riskLevel: 'MEDIUM',
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Verification successful. You may now reset your password.',
+      resetToken,
+      email: user.email,
+    });
   } catch (error) {
     logger.error(`Verify OTP Error: ${error.message}`, { stack: error.stack });
     return res.status(500).json({
@@ -993,12 +1200,10 @@ export async function verifyOtp(req, res) {
   }
 }
 
-const pendingGoogleRegistrations = new Map();
-
-// 9. Google Single Sign-On (SSO) Controller
+// 9. Google Single Sign-On (SSO) Controller (Direct Authentication & Provisioning without Additional OTP)
 export async function googleLogin(req, res) {
   try {
-    const { credential, role, department, otpCode } = req.body;
+    const { credential, role, department } = req.body;
 
     if (!credential || typeof credential !== 'string' || !credential.trim()) {
       return res.status(400).json({
@@ -1097,7 +1302,7 @@ export async function googleLogin(req, res) {
       where: { email },
     });
 
-    // ── STAGE 1 & 2: NEW USER ONBOARDING (Role Selection & OTP) ──
+    // ── STAGE 1 & 2: NEW USER ONBOARDING (Direct Creation without OTP) ──
     if (!user) {
       const normalizedRole = typeof role === 'string' ? role.trim().toUpperCase() : undefined;
       const ALLOWED_ONBOARDING_ROLES = ['USER', 'MODERATOR', 'COURSE_CREATOR'];
@@ -1130,87 +1335,28 @@ export async function googleLogin(req, res) {
             name: name || email.split('@')[0],
             avatar,
           },
-          message: 'Please choose your target role and complete verification.',
+          message: 'Please choose your target role to complete account setup.',
         });
       }
 
-      // Step B: Role provided, dispatch OTP verification passcode
-      if (!otpCode) {
-        const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-        pendingGoogleRegistrations.set(email.toLowerCase(), {
-          email: email.toLowerCase(),
-          name: name || email.split('@')[0],
-          avatar,
-          role: normalizedRole,
-          department: department || 'Engineering',
-          otp: generatedOtp,
-          expires: Date.now() + 10 * 60 * 1000,
-        });
-
-        sendOtpEmail(email, generatedOtp, name, 'Google Account Onboarding').catch((emailErr) => {
-          logger.warn(`Could not dispatch Google onboarding OTP email: ${emailErr.message}`);
-        });
-
-        logger.info(`Google onboarding OTP dispatched to ${email} for role: ${normalizedRole}`);
-
-        return res.status(200).json({
-          success: true,
-          requiresOtp: true,
-          email,
-          role: normalizedRole,
-          department,
-          message: `A 6-digit verification code has been dispatched to ${email}.`,
-        });
-      }
-
-      // Step C: Verify OTP passcode and provision user
-      const pending = pendingGoogleRegistrations.get(email.toLowerCase());
-      if (!pending || pending.otp !== otpCode.trim() || Date.now() > pending.expires) {
-        return res.status(400).json({
-          success: false,
-          error: 'INVALID_OTP',
-          message: 'Invalid or expired verification passcode. Please try again.',
-        });
-      }
-
-      const pendingRole = typeof pending.role === 'string' ? pending.role.trim().toUpperCase() : 'USER';
-      if (pendingRole === 'ADMIN') {
-        pendingGoogleRegistrations.delete(email.toLowerCase());
-        return res.status(403).json({
-          success: false,
-          error: 'FORBIDDEN_ROLE',
-          message: 'Administrative accounts cannot be provisioned via public onboarding.',
-        });
-      }
-
-      if (!ALLOWED_ONBOARDING_ROLES.includes(pendingRole)) {
-        pendingGoogleRegistrations.delete(email.toLowerCase());
-        return res.status(400).json({
-          success: false,
-          error: 'INVALID_ROLE',
-          message: 'Invalid role stored in pending registration.',
-        });
-      }
-
-      const isElevated = pendingRole === 'MODERATOR' || pendingRole === 'COURSE_CREATOR';
+      // Step B: Role provided -> Provision immediately without secondary OTP
+      const isElevated = normalizedRole === 'MODERATOR' || normalizedRole === 'COURSE_CREATOR';
       const initialStatus = isElevated ? 'PENDING_APPROVAL' : 'ACTIVE';
-      const initialRole = isElevated ? 'USER' : pendingRole;
+      const initialRole = isElevated ? 'USER' : normalizedRole;
 
       const dummyPassword = await bcrypt.hash(crypto.randomBytes(16).toString('hex'), 12);
       user = await prisma.user.create({
         data: {
           email,
-          name: pending.name || name || email.split('@')[0],
+          name: name || email.split('@')[0],
           passwordHash: dummyPassword,
           role: initialRole,
           status: initialStatus,
-          requestedRole: isElevated ? pendingRole : null,
-          department: pending.department || department || 'General',
-          avatar: pending.avatar || avatar,
+          requestedRole: isElevated ? normalizedRole : null,
+          department: department || 'General',
+          avatar,
         },
       });
-
-      pendingGoogleRegistrations.delete(email.toLowerCase());
 
       await prisma.auditLog.create({
         data: {
@@ -1219,13 +1365,36 @@ export async function googleLogin(req, res) {
           actorName: user.name,
           action: 'USER_REGISTERED_GOOGLE_SSO',
           resource: 'AUTH',
-          details: `User provisioned via Google SSO with role ${user.role} (status: ${user.status}) after OTP verification`,
+          details: `User provisioned via Google SSO with role ${user.role} (status: ${user.status}) without additional OTP`,
           ipAddress: req.ip,
           riskLevel: isElevated ? 'MEDIUM' : 'LOW',
         },
       });
 
-      logger.info(`New user provisioned via Google SSO on Neon DB: ${user.email} (${user.role})`);
+      if (isElevated && normalizedRole === 'MODERATOR') {
+        try {
+          await prisma.notification.create({
+            data: {
+              targetRole: 'ADMIN',
+              title: '🛡️ Moderator Role Request (Google SSO)',
+              message: `${user.name} (${user.email}) onboarded via Google SSO requesting Moderator privileges. Administrator verification required.`,
+              type: 'SYSTEM',
+              link: '/admin/approvals?tab=moderators',
+            },
+          });
+        } catch (notifErr) {
+          logger.warn(`Moderator Google onboarding notification error: ${notifErr.message}`);
+        }
+
+        return res.status(201).json({
+          success: true,
+          pendingApproval: true,
+          message: 'Your account has been registered via Google SSO. Moderator privileges require administrator verification before activation.',
+          user,
+        });
+      }
+
+      logger.info(`New user provisioned via Google SSO: ${user.email} (${user.role})`);
     } else {
       // ── EXISTING USER LOGIN ──
       if (user.status === 'LOCKED' || user.status === 'SUSPENDED') {
@@ -1233,6 +1402,22 @@ export async function googleLogin(req, res) {
           success: false,
           error: 'ACCOUNT_LOCKED',
           message: `Your account status is ${user.status}. Please contact your administrator.`,
+        });
+      }
+
+      if (user.status === 'PENDING_APPROVAL') {
+        return res.status(403).json({
+          success: false,
+          error: 'ACCOUNT_PENDING_APPROVAL',
+          message: 'Your account is pending administrator verification and operational permission provisioning. You will be notified once active.',
+        });
+      }
+
+      if (user.status === 'PENDING_VERIFICATION') {
+        // Since Google has cryptographically verified their email, activate their account
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: { status: 'ACTIVE', otpCode: null, otpExpires: null },
         });
       }
 
@@ -1349,6 +1534,7 @@ export async function requestPasswordReset(req, res) {
         },
       });
 
+      const io = req.app?.get('io');
       if (io) {
         io.to('role_ADMIN').emit('system_notification', {
           title: '🔑 Password Reset Requested',
@@ -1485,5 +1671,119 @@ export async function changePassword(req, res) {
   } catch (error) {
     logger.error(`Change Password Error: ${error.message}`);
     return res.status(500).json({ success: false, message: 'Failed to establish new password.' });
+  }
+}
+
+/**
+ * POST /api/v1/auth/reset-password
+ * Complete password reset using scoped resetToken obtained via verifyOtp
+ */
+export async function resetPasswordWithOtp(req, res) {
+  try {
+    const { email, resetToken, newPassword } = req.body || {};
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const token = String(resetToken || '').trim();
+    const password = String(newPassword || '');
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        error: 'RESET_TOKEN_REQUIRED',
+        message: 'A valid password reset token is required.',
+      });
+    }
+
+    if (!password || password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        error: 'PASSWORD_TOO_SHORT',
+        message: 'New password must be at least 8 characters long.',
+      });
+    }
+
+    const secret = getAccessSecret();
+    let decoded;
+    try {
+      decoded = jwt.verify(token, secret, { algorithms: ['HS256'] });
+    } catch {
+      return res.status(401).json({
+        success: false,
+        error: 'INVALID_OR_EXPIRED_RESET_TOKEN',
+        message: 'Password reset token has expired or is invalid. Please request a new verification code.',
+      });
+    }
+
+    if (decoded.purpose !== 'PASSWORD_RESET') {
+      return res.status(403).json({
+        success: false,
+        error: 'INVALID_TOKEN_PURPOSE',
+        message: 'Provided token cannot be used for password recovery.',
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.sub },
+    });
+
+    if (!user || (cleanEmail && user.email.toLowerCase() !== cleanEmail)) {
+      return res.status(404).json({
+        success: false,
+        error: 'USER_NOT_FOUND',
+        message: 'User account associated with this reset token was not found.',
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        mustChangePassword: false,
+        passwordResetRequested: false,
+        passwordResetRequestedAt: null,
+        failedLoginAttempts: 0,
+        lockUntil: null,
+        otpCode: null,
+        otpExpires: null,
+      },
+    });
+
+    // Revoke all active sessions for this user across all devices
+    try {
+      await prisma.activeSession.updateMany({
+        where: { userId: user.id, isRevoked: false },
+        data: { isRevoked: true },
+      });
+    } catch (sessionErr) {
+      logger.warn(`Could not revoke prior active sessions on reset-password: ${sessionErr.message}`);
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: user.id,
+        actorEmail: user.email,
+        actorName: user.name,
+        action: 'USER_PASSWORD_RESET_COMPLETED',
+        resource: 'AUTH',
+        details: 'User successfully completed OTP-verified password reset. All prior active sessions were revoked.',
+        ipAddress: req.ip || '127.0.0.1',
+        riskLevel: 'MEDIUM',
+      },
+    });
+
+    logger.info(`Password reset completed successfully for user: ${user.email}`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password reset successful. Please sign in with your new permanent password.',
+    });
+  } catch (error) {
+    logger.error(`Reset Password Error: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      error: 'PASSWORD_RESET_FAILED',
+      message: 'Failed to reset password. Please try again.',
+    });
   }
 }

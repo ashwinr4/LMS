@@ -136,7 +136,6 @@ export async function getModule(req, res) {
             sampleSize: true,
             durationMinutes: true,
             randomizeQuestions: true,
-            questions: true,
             status: true,
           },
         },
@@ -812,25 +811,59 @@ export async function getModuleProgress(req, res) {
     const { id: moduleId } = req.params;
     const userId = req.user.id;
 
-    const assignment = await prisma.assignment.findUnique({
-      where: { userId_moduleId: { userId, moduleId } },
-      include: { module: { select: { status: true, createdBy: true, instructorId: true } } },
+    // 1. Verify that the target course module exists
+    const module = await prisma.module.findUnique({
+      where: { id: moduleId },
+      select: { id: true, status: true, createdBy: true, instructorId: true },
     });
 
-    if (!assignment) {
-      return res.status(200).json({ success: true, enrolled: false, progress: 0, completedLessons: [] });
+    if (!module) {
+      return res.status(404).json({
+        success: false,
+        error: 'NOT_FOUND',
+        message: 'Course module not found.',
+      });
     }
 
-    if (assignment.module?.status === 'DRAFT') {
-      const isPrivileged = req.user && (req.user.role === 'ADMIN' || req.user.role === 'MODERATOR');
-      const isCreator = req.user && (assignment.module.createdBy === req.user.id || assignment.module.instructorId === req.user.id);
-      if (!isPrivileged && !isCreator) {
-        return res.status(404).json({
-          success: false,
-          error: 'COURSE_NOT_PUBLISHED',
-          message: 'Course module not found or is currently not published.',
+    const isPrivileged = req.user && (req.user.role === 'ADMIN' || req.user.role === 'MODERATOR');
+    const isCreator = req.user && (module.createdBy === req.user.id || module.instructorId === req.user.id);
+
+    // 2. Publication integrity: Restrict access to DRAFT courses
+    if (module.status === 'DRAFT' && !isPrivileged && !isCreator) {
+      return res.status(404).json({
+        success: false,
+        error: 'COURSE_NOT_PUBLISHED',
+        message: 'Course module not found or is currently not published.',
+      });
+    }
+
+    // 3. Query caller's enrollment assignment
+    const assignment = await prisma.assignment.findUnique({
+      where: { userId_moduleId: { userId, moduleId } },
+    });
+
+    // 4. Handle unenrolled callers
+    if (!assignment) {
+      // Authoring instructor or platform admin previewing the curriculum receives preview authorization
+      if (isPrivileged || isCreator) {
+        return res.status(200).json({
+          success: true,
+          enrolled: true,
+          isInstructorPreview: true,
+          progress: 100,
+          status: 'COMPLETED',
+          completedLessons: [],
+          lastActive: null,
         });
       }
+
+      // Ordinary students attempting to query progress on courses they are not enrolled in are forbidden
+      return res.status(403).json({
+        success: false,
+        error: 'NOT_ENROLLED',
+        enrolled: false,
+        message: 'You are not enrolled in this course module. Please enroll to access curriculum and progress tracking.',
+      });
     }
 
     let lastActive = null;

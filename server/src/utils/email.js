@@ -5,18 +5,10 @@ let transporter = null;
 
 function getTransporter() {
   if (!transporter) {
-    let host = process.env.SMTP_HOST || 'smtp.gmail.com';
+    let host = process.env.SMTP_HOST || 'smtp-relay.brevo.com';
     let port = parseInt(process.env.SMTP_PORT, 10) || 587;
     let user = process.env.SMTP_USER;
     let pass = process.env.SMTP_PASS;
-
-    // Resend API Key compatibility for cloud deployments
-    if (!user && process.env.RESEND_API_KEY) {
-      host = process.env.SMTP_HOST || 'smtp.resend.com';
-      port = parseInt(process.env.SMTP_PORT, 10) || 465;
-      user = 'resend';
-      pass = process.env.RESEND_API_KEY;
-    }
 
     if (user && pass) {
       transporter = nodemailer.createTransport({
@@ -28,7 +20,7 @@ function getTransporter() {
         maxConnections: 5,
         maxMessages: 100,
       });
-      logger.info(`Live Email Transporter initialized with ${host}:${port} (User: ${user})`);
+      logger.info(`Live Email Transporter initialized with Brevo Relay: ${host}:${port} (User: ${user})`);
     } else {
       if (process.env.NODE_ENV === 'production') {
         logger.warn('SMTP credentials not configured in production environment. Live email dispatch is disabled.');
@@ -41,19 +33,17 @@ function getTransporter() {
 }
 
 export function isEmailConfigured() {
-  return Boolean(
-    (process.env.SMTP_USER && process.env.SMTP_PASS) ||
-    process.env.RESEND_API_KEY
-  );
+  return Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
 }
 
 export async function sendEmail({ to, subject, html, text }) {
   try {
     const mailer = getTransporter();
     const smtpUser = process.env.SMTP_USER || 'noreply@qualiva.local';
-    const fromAddress = process.env.SMTP_FROM || process.env.FROM_EMAIL
-      ? `"Qualiva Security" <${process.env.SMTP_FROM || process.env.FROM_EMAIL}>`
-      : `"Qualiva Security" <${smtpUser}>`;
+    const rawFrom = process.env.SMTP_FROM || smtpUser;
+    const fromAddress = rawFrom.includes('<')
+      ? rawFrom
+      : `"Qualiva Security" <${rawFrom}>`;
 
     if (!mailer) {
       if (process.env.NODE_ENV === 'production') {
@@ -238,6 +228,60 @@ export async function sendPasswordResetEmail(toEmail, tempPassword, userName = '
               ${tempPassword}
             </div>
             <p style="font-size: 12px; color: #64748b;">Please sign in and set a permanent password.</p>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+  return sendEmail({ to: toEmail, subject, html, text });
+}
+
+export async function sendUserProvisionedEmail(toEmail, tempPassword, userName = 'Enterprise Member', role = 'Student') {
+  const roleName = String(role).replace(/_/g, ' ');
+  const subject = `Welcome to Qualiva: Your Account Credentials`;
+  const text = `Hello ${userName},\n\nYour Qualiva Enterprise account has been provisioned with ${roleName} access.\n\nYour login email: ${toEmail}\nYour temporary password: ${tempPassword}\n\nPlease sign in and set a permanent password.\n\nQualiva Enterprise Platform`;
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Account Provisioned</title>
+    </head>
+    <body style="margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; color: #0f172a;">
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 500px; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.04);">
+        <tr>
+          <td style="padding: 28px 28px 16px 28px; text-align: center; border-bottom: 1px solid #f1f5f9;">
+            <h1 style="margin: 0; font-size: 24px; font-weight: 800; color: #0f172a; letter-spacing: -0.5px;">Qualiva</h1>
+            <p style="margin: 4px 0 0 0; font-size: 11px; font-weight: 600; color: #0284c7; text-transform: uppercase; letter-spacing: 0.5px;">Account Provisioned</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 28px;">
+            <p style="margin: 0 0 14px 0; font-size: 15px; color: #1e293b;">Hello <strong>${userName}</strong>,</p>
+            <p style="margin: 0 0 18px 0; font-size: 14px; color: #475569; line-height: 1.6;">
+              An administrator has provisioned your Qualiva account with <strong>${roleName}</strong> access. You can now sign in using the credentials below:
+            </p>
+            
+            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+              <p style="margin: 0 0 8px 0; font-size: 13px; color: #64748b;">Login Email: <strong style="color: #0f172a;">${toEmail}</strong></p>
+              <p style="margin: 0; font-size: 13px; color: #64748b;">Temporary Password:</p>
+              <div style="margin-top: 6px; font-family: monospace; font-size: 20px; font-weight: 700; color: #0284c7; letter-spacing: 1px;">
+                ${tempPassword}
+              </div>
+            </div>
+
+            <p style="margin: 20px 0 0 0; font-size: 13px; color: #475569; line-height: 1.5;">
+              For security, you will be prompted to choose a new permanent password when you sign in for the first time.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 16px 28px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center;">
+            <p style="margin: 0; font-size: 11px; color: #94a3b8;">
+              &copy; 2026 Qualiva Enterprise. High-Stakes Learning & Governance.
+            </p>
           </td>
         </tr>
       </table>

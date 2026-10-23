@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { NavLink, Link, useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { ROUTES } from '../../routes/routeMap.js';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -121,17 +121,59 @@ export function AppShell() {
     return () => { mounted = false; };
   }, [userRole, fetchBadgeCounts, fetchUnreadMessagesCount, fetchRecentMessages]);
 
-  // Sync badge counts whenever user navigates to approval/review routes
+  // Sync badge counts and notifications whenever user navigates to approval/review routes
   useEffect(() => {
-    if (
+    const isReviewRoute =
       location.pathname.startsWith('/admin/approvals') ||
       location.pathname.startsWith(ROUTES.ADMIN_APPROVALS) ||
       location.pathname.startsWith('/creator/requests') ||
-      location.pathname.startsWith(ROUTES.CREATOR_REQUESTS)
-    ) {
+      location.pathname.startsWith(ROUTES.CREATOR_REQUESTS) ||
+      location.pathname.includes('/requests');
+
+    if (isReviewRoute) {
       fetchBadgeCounts();
+      api.get('/notifications')
+        .then((res) => {
+          if (res.data?.notifications) {
+            setNotifications(res.data.notifications);
+          }
+        })
+        .catch(() => {});
     }
   }, [location.pathname, fetchBadgeCounts]);
+
+  // Auto-close open dropdowns when navigating or changing routes/lectures
+  useEffect(() => {
+    setMailboxOpen(false);
+    setNotificationsOpen(false);
+    setProfileDropdownOpen(false);
+  }, [location.pathname, location.search]);
+
+  const mailboxRef = useRef(null);
+  const notificationsRef = useRef(null);
+  const profileRef = useRef(null);
+
+  // Close dropdowns reliably when clicking anywhere outside
+  useEffect(() => {
+    const handleOutsideClick = (event) => {
+      if (mailboxRef.current && !mailboxRef.current.contains(event.target)) {
+        setMailboxOpen(false);
+      }
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target)) {
+        setNotificationsOpen(false);
+      }
+      if (profileRef.current && !profileRef.current.contains(event.target)) {
+        setProfileDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+    };
+  }, []);
 
   // Re-fetch accurate unread count whenever messages are marked as read in the active inbox
   useEffect(() => {
@@ -142,6 +184,46 @@ export function AppShell() {
     window.addEventListener('chat_messages_read', handleRead);
     return () => window.removeEventListener('chat_messages_read', handleRead);
   }, [fetchUnreadMessagesCount, fetchRecentMessages]);
+
+  // Listen for immediate in-page request resolution to instantly clear bell badge
+  useEffect(() => {
+    const handleReqCompleted = (e) => {
+      const reqId = e.detail?.requestId;
+      if (!reqId) return;
+      setNotifications((prev) =>
+        prev.map((n) => {
+          try {
+            const meta = typeof n.metadata === 'string' ? JSON.parse(n.metadata) : n.metadata;
+            if (meta?.requestId === reqId) {
+              return { ...n, isRead: true };
+            }
+          } catch {}
+          return n;
+        })
+      );
+      fetchBadgeCounts();
+    };
+
+    const handleClearQueue = (e) => {
+      const { link, type } = e.detail || {};
+      setNotifications((prev) =>
+        prev.map((n) => {
+          if ((link && n.link && n.link.includes(link)) || (type && n.type === type)) {
+            return { ...n, isRead: true };
+          }
+          return n;
+        })
+      );
+      fetchBadgeCounts();
+    };
+
+    window.addEventListener('notification_request_completed', handleReqCompleted);
+    window.addEventListener('notifications_clear_queue', handleClearQueue);
+    return () => {
+      window.removeEventListener('notification_request_completed', handleReqCompleted);
+      window.removeEventListener('notifications_clear_queue', handleClearQueue);
+    };
+  }, [fetchBadgeCounts]);
 
   // Real-time WebSocket synchronization across all roles & panels
   useEffect(() => {
@@ -228,6 +310,27 @@ export function AppShell() {
         setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       } else if (payload?.id) {
         setNotifications((prev) => prev.map((n) => (n.id === payload.id ? { ...n, isRead: true } : n)));
+      } else if (payload?.requestId) {
+        setNotifications((prev) =>
+          prev.map((n) => {
+            try {
+              const meta = typeof n.metadata === 'string' ? JSON.parse(n.metadata) : n.metadata;
+              if (meta?.requestId === payload.requestId) {
+                return { ...n, isRead: true };
+              }
+            } catch {}
+            return n;
+          })
+        );
+      } else if (payload?.link || payload?.type) {
+        setNotifications((prev) =>
+          prev.map((n) => {
+            if ((payload.link && n.link && n.link.includes(payload.link)) || (payload.type && n.type === payload.type)) {
+              return { ...n, isRead: true };
+            }
+            return n;
+          })
+        );
       }
       fetchBadgeCounts();
     };
@@ -397,7 +500,7 @@ export function AppShell() {
       {mobileOpen && (
         <div
           onClick={() => setMobileOpen(false)}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 md:hidden"
         />
       )}
 
@@ -576,7 +679,7 @@ export function AppShell() {
       {/* 3. Main Content Container */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top Navbar */}
-        <header className="h-16 px-4 sm:px-8 border-b border-app bg-card/80 backdrop-blur-md flex items-center justify-between gap-4 sticky top-0 z-30">
+        <header className="h-16 px-4 sm:px-8 border-b border-app bg-card/80 backdrop-blur-md flex items-center justify-between gap-4 sticky top-0 z-40">
           {/* Mobile Hamburger Toggle */}
           <div className="flex items-center gap-3 md:hidden">
             <button
@@ -633,7 +736,7 @@ export function AppShell() {
             </button>
 
             {/* Minimal Borderless Inbox Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={mailboxRef}>
               <button
                 type="button"
                 onClick={() => {
@@ -654,14 +757,7 @@ export function AppShell() {
               </button>
 
               {mailboxOpen && (
-                <div
-                  onClick={() => setMailboxOpen(false)}
-                  className="fixed inset-0 z-40"
-                />
-              )}
-
-              {mailboxOpen && (
-                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-surface dark:bg-dark-surface border border-app rounded-dialog shadow-dialog p-4 z-50 animate-slide-up">
+                <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-surface dark:bg-dark-surface border border-app rounded-dialog shadow-dialog p-4 z-50 animate-slide-up">
                   <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-app">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-bold text-app uppercase tracking-wider">
@@ -760,7 +856,7 @@ export function AppShell() {
             </div>
 
             {/* Minimal Borderless Notifications Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={notificationsRef}>
               <button
                 type="button"
                 onClick={() => {
@@ -783,14 +879,7 @@ export function AppShell() {
               </button>
 
               {notificationsOpen && (
-                <div
-                  onClick={() => setNotificationsOpen(false)}
-                  className="fixed inset-0 z-40"
-                />
-              )}
-
-              {notificationsOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-surface dark:bg-dark-surface border border-app rounded-dialog shadow-dialog p-4 z-50 animate-slide-up">
+                <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] bg-surface dark:bg-dark-surface border border-app rounded-dialog shadow-dialog p-4 z-50 animate-slide-up">
                   <div className="flex items-center justify-between pb-2 mb-2 border-b border-app">
                     <span className="text-xs font-bold text-app uppercase tracking-wider">
                       System Notifications
@@ -851,7 +940,7 @@ export function AppShell() {
             </div>
 
             {/* Premium Minimal Borderless Profile Pill */}
-            <div className="relative">
+            <div className="relative" ref={profileRef}>
               <button
                 type="button"
                 onClick={() => setProfileDropdownOpen((prev) => !prev)}
@@ -868,13 +957,6 @@ export function AppShell() {
                 </div>
                 <ChevronDown className="h-3.5 w-3.5 text-slate-400 group-hover:text-app transition-colors" />
               </button>
-
-              {profileDropdownOpen && (
-                <div
-                  onClick={() => setProfileDropdownOpen(false)}
-                  className="fixed inset-0 z-40"
-                />
-              )}
 
               {profileDropdownOpen && (
                 <div className="absolute right-0 mt-2 w-56 bg-surface dark:bg-dark-surface border border-app rounded-dialog shadow-dialog py-2 z-50 animate-slide-up">

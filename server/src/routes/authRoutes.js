@@ -11,6 +11,7 @@ import {
   verifyOtp,
   requestPasswordReset,
   changePassword,
+  resetPasswordWithOtp,
 } from '../controllers/authController.js';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -26,6 +27,7 @@ router.post('/refresh', refresh);
 router.post('/logout', logout);
 router.post('/request-otp', requestOtp);
 router.post('/verify-otp', verifyOtp);
+router.post('/reset-password', resetPasswordWithOtp);
 
 // Protected Authentication & Profile Routes
 router.get('/me', authenticateToken, getMe);

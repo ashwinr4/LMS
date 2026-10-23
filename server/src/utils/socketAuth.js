@@ -28,7 +28,7 @@ export function authenticateSocket(socket, next) {
   }
 
   try {
-    const decoded = jwt.verify(token, secret);
+    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] });
     socket.user = {
       ...decoded,
       id: decoded.id || decoded.sub,

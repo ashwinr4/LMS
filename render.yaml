@@ -49,19 +49,15 @@ services:
       - key: UPLOAD_DIR
         value: /var/data/uploads # Mount path for persistent disk
       - key: SMTP_HOST
-        sync: false # Optional: SMTP host (e.g. smtp.gmail.com or smtp.resend.com)
+        value: smtp-relay.brevo.com
       - key: SMTP_PORT
         value: 587
       - key: SMTP_USER
-        sync: false # Optional: SMTP username
+        sync: false # Brevo login email
       - key: SMTP_PASS
-        sync: false # Optional: SMTP password
+        sync: false # Brevo generated master SMTP key
       - key: SMTP_FROM
-        sync: false # Optional: Sender email address
-      - key: RESEND_API_KEY
-        sync: false # Optional: Resend API Key (alternative to standard SMTP)
-      - key: FROM_EMAIL
-        value: onboarding@resend.dev
+        sync: false # Brevo verified sender email
     # Persistent disk volume ensures uploaded videos, PDFs, and chat attachments survive redeployments:
     disk:
       name: qualiva-uploads

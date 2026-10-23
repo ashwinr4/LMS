@@ -95,6 +95,7 @@ export default defineConfig(({ mode }) => {
     headers: securityHeaders,
   },
   build: {
+    sourcemap: false,
     rollupOptions: {
       output: {
         manualChunks: {
