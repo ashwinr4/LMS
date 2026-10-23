@@ -74,9 +74,6 @@ export async function getDatabaseSettings(req, res) {
       urls: {
         postgresql: maskDbUrl(postgresUrl),
         mongodb: maskDbUrl(mongoUrl),
-        mysql: maskDbUrl(process.env.MYSQL_URL || ''),
-        sqlite: process.env.SQLITE_URL || 'file:./prisma/lms_primary.db',
-        sqlserver: maskDbUrl(process.env.SQLSERVER_URL || ''),
       },
       settings: {
         primary: {

@@ -25,12 +25,12 @@ import {
   Lock,
 } from 'lucide-react';
 
-// Database Engines Catalog
+// Database Engines Catalog (Only Supported Production Engines)
 const DATABASE_ENGINES = [
   {
     id: 'postgresql',
     name: 'PostgreSQL',
-    tagline: 'Neon, Supabase, AWS RDS, CockroachDB',
+    tagline: 'Neon, Supabase, CockroachDB, AWS RDS',
     badge: 'Relational SQL',
     iconColor: 'text-blue-500 bg-blue-500/10 border-blue-500/20',
     defaultPlaceholder: 'postgresql://username:password@ep-host.neon.tech/neondb?sslmode=require',
@@ -43,30 +43,6 @@ const DATABASE_ENGINES = [
     iconColor: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20',
     defaultPlaceholder: 'mongodb+srv://username:password@cluster.mongodb.net/qualiva?retryWrites=true&w=majority',
   },
-  {
-    id: 'mysql',
-    name: 'MySQL / MariaDB',
-    tagline: 'PlanetScale, AWS Aurora, Google Cloud SQL',
-    badge: 'Relational SQL',
-    iconColor: 'text-amber-500 bg-amber-500/10 border-amber-500/20',
-    defaultPlaceholder: 'mysql://username:password@host:3306/qualiva_db',
-  },
-  {
-    id: 'sqlite',
-    name: 'SQLite',
-    tagline: 'Embedded Local High-Speed Storage / Turso',
-    badge: 'Serverless Local',
-    iconColor: 'text-cyan-500 bg-cyan-500/10 border-cyan-500/20',
-    defaultPlaceholder: 'file:./prisma/lms_primary.db',
-  },
-  {
-    id: 'sqlserver',
-    name: 'Microsoft SQL Server',
-    tagline: 'Azure SQL Database, Enterprise MSSQL',
-    badge: 'Enterprise Relational',
-    iconColor: 'text-rose-500 bg-rose-500/10 border-rose-500/20',
-    defaultPlaceholder: 'sqlserver://host:1433;database=qualiva;user=sa;password=SecretPassword123!',
-  },
 ];
 
 // Helper to detect engine type from URL
@@ -75,9 +51,6 @@ function detectEngine(url) {
   const u = url.trim();
   if (u.startsWith('postgres://') || u.startsWith('postgresql://')) return 'postgresql';
   if (u.startsWith('mongodb://') || u.startsWith('mongodb+srv://')) return 'mongodb';
-  if (u.startsWith('mysql://') || u.startsWith('mariadb://')) return 'mysql';
-  if (u.startsWith('file:') || u.startsWith('sqlite:') || u.endsWith('.db')) return 'sqlite';
-  if (u.startsWith('sqlserver://') || u.startsWith('mssql://')) return 'sqlserver';
   return 'unknown';
 }
 
@@ -125,16 +98,10 @@ export default function AdminSettings() {
     primary: {
       postgresql: '',
       mongodb: '',
-      mysql: '',
-      sqlite: 'file:./prisma/lms_primary.db',
-      sqlserver: '',
     },
     backup: {
       postgresql: '',
       mongodb: '',
-      mysql: '',
-      sqlite: 'file:./prisma/lms_backup.db',
-      sqlserver: '',
     },
   });
 
@@ -407,7 +374,7 @@ export default function AdminSettings() {
         </div>
 
         {/* Primary Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {DATABASE_ENGINES.map((engine) => {
             const isActive = activePrimaryEngine === engine.id;
             const key = `primary_${engine.id}`;
@@ -657,7 +624,7 @@ export default function AdminSettings() {
         </div>
 
         {/* Backup Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {DATABASE_ENGINES.map((engine) => {
             const isActive = activeBackupEngine === engine.id;
             const key = `backup_${engine.id}`;
