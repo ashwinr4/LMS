@@ -94,57 +94,83 @@ async function verifyLessonAccess(user, filename) {
     return true;
   }
 
-  // Lookup lessons associated with this media file
+  // 1. Find all lessons referencing this media file (flat query)
   const lessons = await prisma.lesson.findMany({
     where: {
       OR: [
         { videoUrl: { contains: filename } },
         { content: { contains: filename } },
         { notes: { contains: filename } },
+        { documentName: { contains: filename } },
       ],
     },
-    include: {
-      section: {
-        include: {
-          module: {
-            select: {
-              id: true,
-              status: true,
-              createdBy: true,
-              instructorId: true,
-            },
-          },
-        },
-      },
+    select: {
+      id: true,
+      sectionId: true,
     },
   });
 
-  // If file was recently uploaded before lesson was saved to database
+  // Fail closed: if resource is not mapped to any lesson, reject (even for creators)
   if (!lessons || lessons.length === 0) {
-    if (user.role === 'COURSE_CREATOR') {
-      return true; // Authoring preview
-    }
     return false;
   }
 
-  for (const lesson of lessons) {
-    const module = lesson.section?.module;
-    if (!module) continue;
+  // 2. Resolve section IDs and fetch sections via direct foreign-key query
+  const sectionIds = [...new Set(lessons.map((l) => l.sectionId).filter(Boolean))];
+  if (sectionIds.length === 0) {
+    return false;
+  }
 
-    // Course Creator: allowed if author or instructor of the course
+  const sections = await prisma.section.findMany({
+    where: {
+      id: { in: sectionIds },
+    },
+    select: {
+      id: true,
+      moduleId: true,
+    },
+  });
+
+  if (!sections || sections.length === 0) {
+    return false;
+  }
+
+  // 3. Resolve module IDs and fetch parent course modules
+  const moduleIds = [...new Set(sections.map((s) => s.moduleId).filter(Boolean))];
+  if (moduleIds.length === 0) {
+    return false;
+  }
+
+  const modules = await prisma.module.findMany({
+    where: {
+      id: { in: moduleIds },
+    },
+    select: {
+      id: true,
+      status: true,
+      createdBy: true,
+      instructorId: true,
+    },
+  });
+
+  if (!modules || modules.length === 0) {
+    return false;
+  }
+
+  // 4. Safely verify creator ownership or active student enrollment across matched modules
+  for (const module of modules) {
+    // Course Creator: allowed ONLY if author or instructor of this specific course module
     if (user.role === 'COURSE_CREATOR') {
       if (module.createdBy === user.id || module.instructorId === user.id) {
         return true;
       }
     }
 
-    // Enrolled student: check active non-expired assignment
-    const assignment = await prisma.assignment.findUnique({
+    // Enrolled Student: check active non-expired assignment
+    const assignment = await prisma.assignment.findFirst({
       where: {
-        userId_moduleId: {
-          userId: user.id,
-          moduleId: module.id,
-        },
+        userId: user.id,
+        moduleId: module.id,
       },
       select: {
         id: true,
