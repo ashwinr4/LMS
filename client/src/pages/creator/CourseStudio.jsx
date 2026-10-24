@@ -12,7 +12,7 @@ import { Select } from '../../components/ui/Select.jsx';
 import {
   BookOpen, Plus, Edit2, Trash2, ChevronRight,
   Video, FileText, Youtube, File, Search, Layers,
-  Clock, Star, Users, RefreshCw, AlertCircle, Image as ImageIcon,
+  Clock, Users, RefreshCw, AlertCircle, Image as ImageIcon,
   CheckCircle2, UploadCloud, Link as LinkIcon, Calendar,
   Rocket, Check, Globe, GraduationCap, Award, HelpCircle,
   Loader2,
@@ -1144,7 +1144,6 @@ export default function CourseStudio() {
                     {courseDetails.sections?.reduce((sum, s) => sum + (s.lessons?.length || 0), 0)} Lectures
                   </span>
                   <span className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5 text-purple-500" />{courseDetails.enrolledCount || 0} Students Enrolled</span>
-                  <span className="flex items-center gap-1.5"><Star className="h-3.5 w-3.5 text-amber-500" />{courseDetails.rating?.toFixed(1) || '5.0'} Rating</span>
                 </div>
               </div>
 

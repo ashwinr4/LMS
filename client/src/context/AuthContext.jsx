@@ -83,10 +83,14 @@ export function AuthProvider({ children }) {
             clearAuth();
           }
         } catch {
-          // Token might have expired, attempt refresh
+          // Token might have expired, attempt fast refresh
           try {
-            const { data } = await api.post('/auth/refresh');
-            if (data.accessToken && data.user) {
+            const refreshPromise = api.post('/auth/refresh');
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('REFRESH_TIMEOUT')), 2500)
+            );
+            const { data } = await Promise.race([refreshPromise, timeoutPromise]);
+            if (data?.accessToken && data?.user) {
               saveAuth(data.user, data.accessToken);
             } else {
               clearAuth();
@@ -96,10 +100,14 @@ export function AuthProvider({ children }) {
           }
         }
       } else {
-        // No local token in storage - check if a valid session cookie exists before giving up
+        // No local token in storage - fast check if a valid session cookie exists without freezing first render
         try {
-          const { data } = await api.post('/auth/refresh');
-          if (data.accessToken && data.user) {
+          const refreshPromise = api.post('/auth/refresh');
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('REFRESH_TIMEOUT')), 1200)
+          );
+          const { data } = await Promise.race([refreshPromise, timeoutPromise]);
+          if (data?.accessToken && data?.user) {
             saveAuth(data.user, data.accessToken);
           } else {
             clearAuth();

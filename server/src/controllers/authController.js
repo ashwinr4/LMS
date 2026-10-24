@@ -15,7 +15,12 @@ function getRefreshSecret() {
 }
 
 const ACCESS_TOKEN_EXPIRES = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
-const REFRESH_TOKEN_EXPIRES_DAYS = parseInt(process.env.JWT_REFRESH_EXPIRES_DAYS || '7', 10);
+const REFRESH_TOKEN_EXPIRES_HOURS = parseInt(process.env.JWT_REFRESH_EXPIRES_HOURS || '12', 10);
+const REFRESH_TOKEN_MAX_AGE_MS = REFRESH_TOKEN_EXPIRES_HOURS * 60 * 60 * 1000;
+
+function getSessionExpiresAt() {
+  return new Date(Date.now() + REFRESH_TOKEN_MAX_AGE_MS);
+}
 
 function generateAccessToken(user) {
   const secret = getAccessSecret();
@@ -48,7 +53,7 @@ function generateRefreshToken(user) {
       jti: crypto.randomUUID(),
     },
     secret,
-    { algorithm: 'HS256', expiresIn: `${REFRESH_TOKEN_EXPIRES_DAYS}d` }
+    { algorithm: 'HS256', expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || `${REFRESH_TOKEN_EXPIRES_HOURS}h` }
   );
 }
 
@@ -79,7 +84,7 @@ function setRefreshTokenCookie(res, refreshToken) {
     secure: isProd,
     sameSite: isProd ? 'none' : 'lax',
     path: '/',
-    maxAge: REFRESH_TOKEN_EXPIRES_DAYS * 24 * 60 * 60 * 1000,
+    maxAge: REFRESH_TOKEN_MAX_AGE_MS,
   });
 }
 
@@ -337,8 +342,7 @@ export async function register(req, res) {
     const refreshToken = generateRefreshToken(verifiedUser);
     const refreshTokenHash = hashToken(refreshToken);
 
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+    const expiresAt = getSessionExpiresAt();
 
     await prisma.activeSession.create({
       data: {
@@ -509,8 +513,7 @@ export async function login(req, res) {
     const refreshToken = generateRefreshToken(user);
     const refreshTokenHash = hashToken(refreshToken);
 
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+    const expiresAt = getSessionExpiresAt();
 
     await prisma.activeSession.create({
       data: {
@@ -609,8 +612,7 @@ export async function demoLogin(req, res) {
     const refreshToken = generateRefreshToken(user);
     const refreshTokenHash = hashToken(refreshToken);
 
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+    const expiresAt = getSessionExpiresAt();
 
     await prisma.activeSession.create({
       data: {
@@ -744,8 +746,7 @@ export async function refresh(req, res) {
     const newRefreshToken = generateRefreshToken(user);
     const newRefreshTokenHash = hashToken(newRefreshToken);
 
-    const newExpiresAt = new Date();
-    newExpiresAt.setDate(newExpiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+    const newExpiresAt = getSessionExpiresAt();
 
     await prisma.activeSession.create({
       data: {
@@ -1144,8 +1145,7 @@ export async function verifyOtp(req, res) {
       const refreshToken = generateRefreshToken(verifiedUser);
       const refreshTokenHash = hashToken(refreshToken);
 
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+      const expiresAt = getSessionExpiresAt();
 
       await prisma.activeSession.create({
         data: {
@@ -1433,8 +1433,7 @@ export async function googleLogin(req, res) {
     const refreshToken = generateRefreshToken(user);
     const refreshTokenHash = hashToken(refreshToken);
 
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRES_DAYS);
+    const expiresAt = getSessionExpiresAt();
 
     await prisma.activeSession.create({
       data: {

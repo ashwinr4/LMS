@@ -132,9 +132,10 @@ export default function LearningPlayer() {
     setVideoError(false);
   }, [currentSectionIdx, currentLessonIdx]);
 
-  // Check if a lesson is locked (sequential: must complete previous)
+  // Check if a lesson is locked (sequential: must complete previous, or fully locked if unenrolled)
   const isLessonLocked = (sIdx, lIdx) => {
-    if (sIdx === 0 && lIdx === 0) return false; // First lesson always unlocked
+    if (notEnrolled || !module?.hasFullAccess) return true;
+    if (sIdx === 0 && lIdx === 0) return false; // First lesson always unlocked for enrolled students
     const key = `${sIdx}_${lIdx}`;
     if (progress.completedLessons.includes(key)) return false;
     const flatIdx = allLessons.findIndex(
@@ -150,43 +151,51 @@ export default function LearningPlayer() {
     async function load() {
       setLoading(true);
       try {
-        const [modRes, progRes] = await Promise.all([
-          api.get(`/modules/${moduleId}`),
-          api.get(`/modules/${moduleId}/progress`),
-        ]);
-        const mod = modRes.data.module;
-        setModule(mod);
+        let mod = null;
+        try {
+          const modRes = await api.get(`/modules/${moduleId}`);
+          mod = modRes.data.module;
+          setModule(mod);
+          if (mod && !mod.hasFullAccess) {
+            setNotEnrolled(true);
+          }
+        } catch (modErr) {
+          console.error('Failed to load module:', modErr);
+        }
 
-        const prog = progRes.data;
-        setProgress({
-          completedLessons: prog.completedLessons || [],
-          progress: prog.progress || 0,
-          lastActive: prog.lastActive,
-        });
+        try {
+          const progRes = await api.get(`/modules/${moduleId}/progress`);
+          const prog = progRes.data;
+          setProgress({
+            completedLessons: prog.completedLessons || [],
+            progress: prog.progress || 0,
+            lastActive: prog.lastActive,
+          });
 
-        // Restore last position
-        let restoredSection = 0;
-        let restoredLesson = 0;
-        if (prog.lastActive) {
-          const sIdx = Number(prog.lastActive.sectionIdx);
-          const lIdx = Number(prog.lastActive.lessonIdx);
-          if (!isNaN(sIdx) && !isNaN(lIdx)) {
-            // Verify section and lesson indices exist within module
-            if (mod?.sections?.[sIdx]?.lessons?.[lIdx]) {
-              restoredSection = sIdx;
-              restoredLesson = lIdx;
+          // Restore last position
+          let restoredSection = 0;
+          let restoredLesson = 0;
+          if (prog.lastActive) {
+            const sIdx = Number(prog.lastActive.sectionIdx);
+            const lIdx = Number(prog.lastActive.lessonIdx);
+            if (!isNaN(sIdx) && !isNaN(lIdx)) {
+              if (mod?.sections?.[sIdx]?.lessons?.[lIdx]) {
+                restoredSection = sIdx;
+                restoredLesson = lIdx;
+              }
             }
           }
+          setCurrentSectionIdx(restoredSection);
+          setCurrentLessonIdx(restoredLesson);
+          lastPersistedRef.current = `${restoredSection}_${restoredLesson}`;
+          setInitialLoaded(true);
+        } catch (progErr) {
+          if (progErr.response?.status === 403 || progErr.response?.data?.error === 'NOT_ENROLLED') {
+            setNotEnrolled(true);
+          }
         }
-        setCurrentSectionIdx(restoredSection);
-        setCurrentLessonIdx(restoredLesson);
-        lastPersistedRef.current = `${restoredSection}_${restoredLesson}`;
-        setInitialLoaded(true);
       } catch (err) {
-        console.error('Failed to load course:', err);
-        if (err.response?.status === 403 || err.response?.data?.error === 'NOT_ENROLLED') {
-          setNotEnrolled(true);
-        }
+        console.error('Failed to load course player:', err);
       } finally {
         setLoading(false);
       }
@@ -388,7 +397,7 @@ export default function LearningPlayer() {
     );
   }
 
-  if (notEnrolled) {
+  if (notEnrolled && !module) {
     return (
       <div className="text-center py-24 max-w-md mx-auto space-y-4">
         <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-500 flex items-center justify-center mx-auto">
@@ -482,9 +491,40 @@ export default function LearningPlayer() {
         {/* ── Lecture Stage (Center) ────────────────── */}
         <div className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-y-auto" ref={contentRef}>
           <div className="max-w-5xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
-            
+            {/* 🔒 LOCKED / UNENROLLED PREVIEW STAGE */}
+            {(notEnrolled || currentLesson?.isLocked) && (
+              <div className="rounded-xl overflow-hidden bg-slate-900/90 border border-slate-800 p-8 sm:p-12 text-center space-y-5">
+                <div className="h-16 w-16 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto">
+                  <Lock className="h-8 w-8" />
+                </div>
+                <div className="max-w-md mx-auto space-y-2">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    Curriculum Preview Mode
+                  </span>
+                  <h3 className="text-lg font-bold text-white">
+                    {currentLesson?.title || 'Lecture Content Secured'}
+                  </h3>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    You can view the full curriculum syllabus in the sidebar. Direct video streaming, lesson notes, and downloadable course resources require approved enrollment.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                  <Link to="/courses">
+                    <Button variant="primary" className="bg-blue-600 hover:bg-blue-700 text-white font-semibold">
+                      Apply for Enrollment in Catalog
+                    </Button>
+                  </Link>
+                  <Link to="/courses">
+                    <Button variant="outline" className="border-slate-700 text-slate-300 hover:bg-slate-800">
+                      Explore Catalog
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+            )}
+
             {/* 🎬 1. VIDEO PLAYER STAGE */}
-            {currentLesson?.type === 'VIDEO' && (
+            {!notEnrolled && !currentLesson?.isLocked && currentLesson?.type === 'VIDEO' && (
               <div className="rounded-xl overflow-hidden bg-slate-900 border border-slate-800/80 shadow-2xl relative">
                 {/* Anti-Skip Notice Toast */}
                 {showAntiSkipWarning && (
@@ -576,7 +616,7 @@ export default function LearningPlayer() {
             )}
 
             {/* ▶️ 2. YOUTUBE VIDEO STAGE */}
-            {currentLesson?.type === 'YOUTUBE' && currentLesson.videoUrl && (
+            {!notEnrolled && !currentLesson?.isLocked && currentLesson?.type === 'YOUTUBE' && currentLesson.videoUrl && (
               <div className="rounded-xl overflow-hidden bg-black border border-slate-800/80 shadow-2xl relative">
                 <div className="relative w-full" style={{ paddingBottom: '56.25%' }}>
                   <iframe
@@ -592,7 +632,7 @@ export default function LearningPlayer() {
             )}
 
             {/* 📄 3. DOCUMENT / PDF VIEWER (Auto-download disabled; downloaded only on explicit user click) */}
-            {(currentLesson?.type === 'DOCUMENT' || currentLesson?.type === 'PDF') && (
+            {!notEnrolled && !currentLesson?.isLocked && (currentLesson?.type === 'DOCUMENT' || currentLesson?.type === 'PDF') && (
               <div className="rounded-xl overflow-hidden bg-slate-900 border border-slate-800/80 p-6 sm:p-10 space-y-6">
                 <div className="py-8 flex flex-col items-center text-center max-w-lg mx-auto space-y-5">
                   <div
@@ -653,7 +693,7 @@ export default function LearningPlayer() {
             )}
 
             {/* 📝 4. MARKDOWN / ARTICLE NOTES */}
-            {(currentLesson?.type === 'MARKDOWN' || currentLesson?.type === 'TEXT') && (
+            {!notEnrolled && !currentLesson?.isLocked && (currentLesson?.type === 'MARKDOWN' || currentLesson?.type === 'TEXT') && (
               <div className="rounded-xl overflow-hidden bg-slate-900 border border-slate-800/80 p-6 sm:p-8 space-y-6">
                 <div className="flex items-center justify-between text-xs text-slate-400 font-medium pb-4 border-b border-slate-800">
                   <span>Reading Progress</span>
@@ -725,7 +765,17 @@ export default function LearningPlayer() {
                   Previous
                 </Button>
 
-                {!isCompleted ? (
+                {notEnrolled ? (
+                  <Link to="/courses">
+                    <Button
+                      size="sm"
+                      leftIcon={<Lock className="h-3.5 w-3.5 text-amber-400" />}
+                      className="bg-amber-600 hover:bg-amber-700 text-white font-medium shadow-md"
+                    >
+                      Apply for Enrollment to Unlock Content
+                    </Button>
+                  </Link>
+                ) : !isCompleted ? (
                   isPlayableVideo ? (
                     duration > 0 && currentTime >= duration - 2 ? (
                       <Button
@@ -827,18 +877,17 @@ export default function LearningPlayer() {
                           <button
                             key={lesson.id}
                             type="button"
-                            disabled={locked}
                             onClick={() => {
                               setCurrentSectionIdx(sIdx);
                               setCurrentLessonIdx(lIdx);
                               setReadPercent(0);
                             }}
                             className={cn(
-                              'w-full flex items-center gap-3 px-4 py-3 text-left transition-colors',
+                              'w-full flex items-center gap-3 px-4 py-3 text-left transition-colors cursor-pointer',
                               active
                                 ? 'bg-indigo-950/50 border-l-4 border-l-indigo-500'
                                 : 'hover:bg-slate-800/40',
-                              locked ? 'opacity-40 cursor-not-allowed bg-slate-950/40' : 'cursor-pointer'
+                              locked ? 'opacity-70 bg-slate-950/20' : ''
                             )}
                           >
                             <div className="shrink-0">

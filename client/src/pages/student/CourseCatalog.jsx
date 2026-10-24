@@ -10,8 +10,9 @@ import { Button } from '../../components/ui/Button.jsx';
 import { Modal } from '../../components/ui/Modal.jsx';
 import { SegmentedToggle } from '../../components/ui/SegmentedToggle.jsx';
 import {
-  BookOpen, Clock, User, Star, Search, Filter,
-  ArrowRight, Sparkles, ShieldCheck, CheckCircle2, Play, RefreshCw, Send
+  BookOpen, Clock, User, Search, Filter,
+  ArrowRight, Sparkles, ShieldCheck, CheckCircle2, Play, RefreshCw, Send,
+  Lock, Unlock, ChevronDown, ChevronUp, FileText, Video, File, Check
 } from 'lucide-react';
 
 export default function CourseCatalog() {
@@ -30,9 +31,42 @@ export default function CourseCatalog() {
   const [motivation, setMotivation] = useState('Seeking advanced mastery for enterprise infrastructure deployment.');
   const [submitting, setSubmitting] = useState(false);
 
+  // Curriculum Syllabus Preview Modal
+  const [curriculumCourse, setCurriculumCourse] = useState(null);
+  const [curriculumDetails, setCurriculumDetails] = useState(null);
+  const [loadingCurriculum, setLoadingCurriculum] = useState(false);
+  const [expandedSections, setExpandedSections] = useState({});
+
   // User assignments & request map
   const [userAssignments, setUserAssignments] = useState({});
   const [userRequests, setUserRequests] = useState({});
+
+  const handleOpenCurriculum = async (course) => {
+    setCurriculumCourse(course);
+    setCurriculumDetails(null);
+    setLoadingCurriculum(true);
+    try {
+      const { data } = await api.get(`/modules/${course.id}`);
+      setCurriculumDetails(data.module || course);
+      const exp = {};
+      (data.module?.sections || []).forEach((sec) => {
+        exp[sec.id] = true;
+      });
+      setExpandedSections(exp);
+    } catch (err) {
+      console.error('Failed to load curriculum:', err);
+      setCurriculumDetails(course);
+    } finally {
+      setLoadingCurriculum(false);
+    }
+  };
+
+  const toggleSection = (sectionId) => {
+    setExpandedSections((prev) => ({
+      ...prev,
+      [sectionId]: !prev[sectionId],
+    }));
+  };
 
   const fetchCoursesAndStatus = useCallback(async () => {
     try {
@@ -248,59 +282,61 @@ export default function CourseCatalog() {
                       <Clock className="h-3.5 w-3.5" />
                       {course.duration || '4-6 Weeks'}
                     </span>
-                    {course.ratingCount > 0 ? (
-                      <span className="flex items-center gap-1 text-amber-500 font-semibold">
-                        <Star className="h-3.5 w-3.5 fill-amber-500" />
-                        {course.rating.toFixed(1)} ({course.ratingCount})
-                      </span>
-                    ) : (
-                      <span className="text-[11px] font-medium text-app-muted">
-                        New Curriculum
-                      </span>
-                    )}
+                    <span className="text-[11px] font-medium text-app-secondary">
+                      {course.department || 'Curriculum'}
+                    </span>
                   </div>
 
-                  {isEnrolled ? (
-                    <Button
-                      variant="primary"
-                      size="md"
-                      className="w-full"
-                      leftIcon={<Play className="h-4 w-4" />}
-                      onClick={() => navigate(`/courses/${course.id}/learn`)}
-                    >
-                      Resume Learning
-                    </Button>
-                  ) : isUnderReview ? (
+                  <div className="grid grid-cols-2 gap-2 pt-1">
                     <Button
                       variant="outline"
                       size="md"
-                      className="w-full text-brand-600 dark:text-brand-400 border-brand-500/50"
-                      onClick={() => navigate(`/waiting-approval/${course.id}`)}
-                      rightIcon={<ArrowRight className="h-4 w-4" />}
+                      className="w-full text-xs font-semibold"
+                      leftIcon={<BookOpen className="h-3.5 w-3.5 text-brand-600 dark:text-brand-400" />}
+                      onClick={() => handleOpenCurriculum(course)}
                     >
-                      View Pipeline Status
+                      Syllabus
                     </Button>
-                  ) : !user ? (
-                    <Button
-                      variant="primary"
-                      size="md"
-                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold"
-                      rightIcon={<ArrowRight className="h-4 w-4" />}
-                      onClick={() => navigate('/login', { state: { from: { pathname: '/catalog' } } })}
-                    >
-                      Sign In to Enroll
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="primary"
-                      size="md"
-                      className="w-full"
-                      rightIcon={<ArrowRight className="h-4 w-4" />}
-                      onClick={() => setModalCourse(course)}
-                    >
-                      Request Enrollment
-                    </Button>
-                  )}
+
+                    {isEnrolled ? (
+                      <Button
+                        variant="primary"
+                        size="md"
+                        className="w-full text-xs"
+                        leftIcon={<Play className="h-3.5 w-3.5" />}
+                        onClick={() => navigate(`/courses/${course.id}/learn`)}
+                      >
+                        Resume
+                      </Button>
+                    ) : isUnderReview ? (
+                      <Button
+                        variant="outline"
+                        size="md"
+                        className="w-full text-xs text-brand-600 dark:text-brand-400 border-brand-500/50"
+                        onClick={() => navigate(`/waiting-approval/${course.id}`)}
+                      >
+                        Status
+                      </Button>
+                    ) : !user ? (
+                      <Button
+                        variant="primary"
+                        size="md"
+                        className="w-full text-xs bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                        onClick={() => navigate('/login', { state: { from: { pathname: '/catalog' } } })}
+                      >
+                        Enroll
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="primary"
+                        size="md"
+                        className="w-full text-xs font-semibold"
+                        onClick={() => setModalCourse(course)}
+                      >
+                        Enroll
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -375,6 +411,231 @@ export default function CourseCatalog() {
               </Button>
             </div>
           </form>
+        )}
+      </Modal>
+
+      {/* Course Curriculum & Syllabus Preview Modal */}
+      <Modal
+        isOpen={!!curriculumCourse}
+        onClose={() => setCurriculumCourse(null)}
+        title={curriculumCourse ? `Curriculum: ${curriculumCourse.title}` : 'Course Curriculum'}
+        maxWidth="max-w-2xl"
+      >
+        {curriculumCourse && (
+          <div className="space-y-4">
+            {/* Header info */}
+            <div className="p-4 bg-elevated rounded-btn border border-app space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs font-bold text-white bg-blue-600 px-2 py-0.5 rounded">
+                    {curriculumCourse.code}
+                  </span>
+                  <span className="text-xs font-semibold text-app">{curriculumCourse.title}</span>
+                </div>
+                <span className="text-[11px] font-semibold text-app-muted uppercase tracking-wider">
+                  {curriculumCourse.level || 'Beginner'} • {curriculumCourse.department}
+                </span>
+              </div>
+              <p className="text-xs text-app-secondary line-clamp-2">
+                {curriculumCourse.description || 'Comprehensive module curriculum syllabus.'}
+              </p>
+              <div className="flex flex-wrap items-center gap-3 text-[11px] text-app-muted pt-1 border-t border-app/60">
+                <span className="flex items-center gap-1">
+                  <Clock className="h-3.5 w-3.5 text-app-muted" /> {curriculumCourse.duration || 'Self-paced'}
+                </span>
+                <span className="meta-divider" />
+                <span>
+                  {curriculumDetails?.sections?.length || 0} Sections •{' '}
+                  {(curriculumDetails?.sections || []).reduce((acc, s) => acc + (s.lessons?.length || 0), 0)} Lectures
+                </span>
+                <span className="meta-divider" />
+                {userAssignments[curriculumCourse.id] ? (
+                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Enrolled Student
+                  </span>
+                ) : (
+                  <span className="text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1">
+                    <Lock className="h-3.5 w-3.5" /> Syllabus Preview
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Content Masking Alert for Unenrolled */}
+            {!userAssignments[curriculumCourse.id] && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-btn text-xs text-amber-700 dark:text-amber-300 flex items-start gap-2.5">
+                <Lock className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                <div className="space-y-0.5">
+                  <p className="font-semibold">Curriculum Syllabus Preview</p>
+                  <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80 leading-relaxed">
+                    You can view the full course breakdown below. Interactive lecture videos, source code, and downloadable documents remain locked until your enrollment request is approved.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Sections and Lessons Accordion */}
+            <div className="space-y-3 max-h-[48vh] overflow-y-auto pr-1">
+              {loadingCurriculum ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw className="h-6 w-6 text-brand-500 animate-spin" />
+                  <span className="ml-2 text-xs text-app-muted">Loading syllabus structure...</span>
+                </div>
+              ) : !curriculumDetails?.sections?.length ? (
+                <div className="text-center py-8 text-xs text-app-muted bg-elevated/50 rounded-btn border border-app">
+                  No syllabus sections published for this course yet.
+                </div>
+              ) : (
+                curriculumDetails.sections.map((section, sIdx) => {
+                  const isExpanded = expandedSections[section.id] !== false;
+                  const lessons = section.lessons || [];
+
+                  return (
+                    <div key={section.id} className="border border-app rounded-btn overflow-hidden bg-card">
+                      <button
+                        type="button"
+                        onClick={() => toggleSection(section.id)}
+                        className="w-full flex items-center justify-between p-3.5 bg-surface-secondary/40 dark:bg-dark-elevated/40 hover:bg-surface-secondary dark:hover:bg-dark-elevated text-left transition-colors"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="h-5 w-5 rounded-full bg-brand-500/10 text-brand-600 dark:text-brand-400 text-[10px] font-bold flex items-center justify-center shrink-0">
+                            {sIdx + 1}
+                          </span>
+                          <span className="text-xs font-bold text-app truncate">
+                            {section.title}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-app-muted shrink-0">
+                          <span className="text-[11px]">{lessons.length} lectures</span>
+                          {isExpanded ? (
+                            <ChevronUp className="h-4 w-4 text-app-muted" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-app-muted" />
+                          )}
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="divide-y divide-app border-t border-app">
+                          {lessons.map((lesson, lIdx) => {
+                            const isLocked = lesson.isLocked || !userAssignments[curriculumCourse.id];
+
+                            return (
+                              <div
+                                key={lesson.id}
+                                className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-surface-secondary/20 dark:hover:bg-dark-elevated/20 transition-colors"
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <span className="text-[11px] font-mono text-app-muted w-4 text-right shrink-0">
+                                    {lIdx + 1}.
+                                  </span>
+                                  <span className="shrink-0 text-app-muted">
+                                    {lesson.type === 'VIDEO' || lesson.type === 'YOUTUBE' ? (
+                                      <Video className="h-3.5 w-3.5 text-blue-500" />
+                                    ) : lesson.type === 'DOCUMENT' || lesson.type === 'PDF' ? (
+                                      <File className="h-3.5 w-3.5 text-rose-500" />
+                                    ) : (
+                                      <FileText className="h-3.5 w-3.5 text-emerald-500" />
+                                    )}
+                                  </span>
+                                  <span className="font-medium text-app truncate">
+                                    {lesson.title}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {lesson.duration && (
+                                    <span className="text-[11px] text-app-muted">
+                                      {lesson.duration}
+                                    </span>
+                                  )}
+                                  {isLocked ? (
+                                    <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+                                      <Lock className="h-2.5 w-2.5" /> Locked
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                                      <CheckCircle2 className="h-2.5 w-2.5" /> Unlocked
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Footer Action Buttons */}
+            <div className="flex items-center justify-between gap-3 pt-3 border-t border-app">
+              <Button
+                variant="outline"
+                size="md"
+                onClick={() => setCurriculumCourse(null)}
+              >
+                Close
+              </Button>
+
+              {userAssignments[curriculumCourse.id] ? (
+                <Button
+                  variant="primary"
+                  size="md"
+                  leftIcon={<Play className="h-4 w-4" />}
+                  onClick={() => {
+                    setCurriculumCourse(null);
+                    navigate(`/courses/${curriculumCourse.id}/learn`);
+                  }}
+                >
+                  Resume Learning
+                </Button>
+              ) : userRequests[curriculumCourse.id] &&
+                (userRequests[curriculumCourse.id].status === 'PENDING_CREATOR' ||
+                  userRequests[curriculumCourse.id].status === 'FORWARDED_TO_ADMIN') ? (
+                <Button
+                  variant="outline"
+                  size="md"
+                  className="text-brand-600 dark:text-brand-400 border-brand-500/50"
+                  onClick={() => {
+                    setCurriculumCourse(null);
+                    navigate(`/waiting-approval/${curriculumCourse.id}`);
+                  }}
+                  rightIcon={<ArrowRight className="h-4 w-4" />}
+                >
+                  View Pipeline Status
+                </Button>
+              ) : !user ? (
+                <Button
+                  variant="primary"
+                  size="md"
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                  onClick={() => {
+                    setCurriculumCourse(null);
+                    navigate('/login', { state: { from: { pathname: '/catalog' } } });
+                  }}
+                  rightIcon={<ArrowRight className="h-4 w-4" />}
+                >
+                  Sign In to Enroll
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={() => {
+                    const c = curriculumCourse;
+                    setCurriculumCourse(null);
+                    setModalCourse(c);
+                  }}
+                  rightIcon={<ArrowRight className="h-4 w-4" />}
+                >
+                  Apply for Enrollment
+                </Button>
+              )}
+            </div>
+          </div>
         )}
       </Modal>
     </div>

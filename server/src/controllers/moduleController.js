@@ -147,13 +147,22 @@ export async function getModule(req, res) {
       return res.status(404).json({ success: false, message: 'Module not found.' });
     }
 
+    // Determine caller access rights
+    const isPrivileged = req.user && (req.user.role === 'ADMIN' || req.user.role === 'MODERATOR');
+    const isCreator = req.user && req.user.role === 'COURSE_CREATOR' && (module.createdBy === req.user.id || module.instructorId === req.user.id);
+    let isEnrolled = false;
+    if (req.user && req.user.id) {
+      const assignment = await prisma.assignment.findUnique({
+        where: { userId_moduleId: { userId: req.user.id, moduleId: id } },
+      });
+      isEnrolled = Boolean(assignment && assignment.status !== 'EXPIRED');
+    }
+    const hasFullAccess = Boolean(isPrivileged || isCreator || isEnrolled);
+
     // Publication integrity: Non-active (DRAFT/ARCHIVED/DEPRECATED) modules are restricted
     if (module.status !== 'ACTIVE') {
-      const isPrivileged = req.user && (req.user.role === 'ADMIN' || req.user.role === 'MODERATOR');
-      const isCreator = req.user && req.user.role === 'COURSE_CREATOR' && (module.createdBy === req.user.id || module.instructorId === req.user.id);
-
       // Unapproved DRAFT courses are strictly restricted to Administrators, Moderators, and the authoring Creator.
-      // Ordinary enrolled students CANNOT access unapproved DRAFT courses.
+      // Ordinary students CANNOT access unapproved DRAFT courses.
       if (module.status === 'DRAFT') {
         if (!isPrivileged && !isCreator) {
           return res.status(404).json({
@@ -165,15 +174,7 @@ export async function getModule(req, res) {
       } else {
         // ARCHIVED / DEPRECATED:
         // Accessible by privileged users, the course creator, or actively enrolled students
-        let isEnrolled = false;
-        if (req.user && req.user.id) {
-          const assignment = await prisma.assignment.findUnique({
-            where: { userId_moduleId: { userId: req.user.id, moduleId: id } },
-          });
-          isEnrolled = assignment && assignment.status !== 'EXPIRED';
-        }
-
-        if (!isPrivileged && !isCreator && !isEnrolled) {
+        if (!hasFullAccess) {
           return res.status(404).json({
             success: false,
             error: 'COURSE_NOT_PUBLISHED',
@@ -183,13 +184,45 @@ export async function getModule(req, res) {
       }
     }
 
+    // Curriculum Visibility & Content Protection:
+    // All users can see the syllabus structure (sections, lesson titles, types, duration, order),
+    // but educational content (video URLs, documents, reading text, notes) is strictly masked for unenrolled users.
+    const sanitizedSections = (module.sections || []).map((section) => ({
+      ...section,
+      lessons: (section.lessons || []).map((lesson) => {
+        if (hasFullAccess) {
+          return {
+            ...lesson,
+            isLocked: false,
+          };
+        }
+        return {
+          id: lesson.id,
+          title: lesson.title,
+          description: lesson.description,
+          type: lesson.type,
+          duration: lesson.duration,
+          order: lesson.order,
+          sectionId: lesson.sectionId,
+          isLocked: true,
+          videoUrl: null,
+          content: null,
+          documentName: null,
+          notes: null,
+        };
+      }),
+    }));
+
     const payload = {
       success: true,
       module: {
         ...module,
+        sections: sanitizedSections,
         outcomes: module.outcomes ? JSON.parse(module.outcomes) : [],
         prerequisites: module.prerequisites ? JSON.parse(module.prerequisites) : [],
         enrolledCount: module._count.assignments,
+        hasFullAccess,
+        isEnrolled,
       },
     };
 

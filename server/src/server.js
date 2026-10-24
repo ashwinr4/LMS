@@ -280,8 +280,8 @@ process.on('unhandledRejection', (reason, promise) => {
   logger.error(`CRITICAL: Unhandled Promise Rejection caught by Crash Guard: ${reason?.message || reason}`);
 });
 
-// 10. Startup Validation & Launch Server
 import { validateEnvironmentConfig } from './utils/envValidation.js';
+import { prisma } from './utils/prisma.js';
 export { validateEnvironmentConfig };
 
 validateEnvironmentConfig();
@@ -293,4 +293,14 @@ server.listen(PORT, '0.0.0.0', () => {
   logger.info(`🔒 Security headers (Helmet) & CORS active for ${getAllowedOrigins().join(', ')}`);
   logger.info(`🩺 Health Check: http://localhost:${PORT}/api/v1/health`);
   logger.info(`====================================================`);
+
+  // Asynchronously pre-warm primary database connection pool so cold starts don't delay client requests
+  setImmediate(async () => {
+    try {
+      await prisma.user.findFirst({ select: { id: true } });
+      logger.info('⚡ Primary database pool pre-warmed successfully.');
+    } catch (err) {
+      logger.warn(`Database pre-warm non-blocking warning: ${err.message}`);
+    }
+  });
 });
