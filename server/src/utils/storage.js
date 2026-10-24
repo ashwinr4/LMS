@@ -93,6 +93,11 @@ export function resolveMediaUrl(subpath = '', _req = null) {
 export function getStorageDiagnostics() {
   const rootDir = getUploadRootDir();
   const isCustom = Boolean(process.env.STORAGE_PATH || process.env.UPLOAD_DIR);
+  const r2Active = Boolean(
+    process.env.R2_ACCESS_KEY_ID &&
+    process.env.R2_SECRET_ACCESS_KEY &&
+    (process.env.R2_ENDPOINT || process.env.R2_ACCOUNT_ID)
+  );
   let isWritable = false;
 
   try {
@@ -106,8 +111,19 @@ export function getStorageDiagnostics() {
 
   return {
     rootDir,
-    mode: isCustom ? 'persistent-mount' : 'local-ephemeral',
+    mode: r2Active ? 'cloudflare-r2' : isCustom ? 'persistent-mount' : 'local-ephemeral',
     isWritable,
     isCustomPath: isCustom,
+    isR2Active: r2Active,
   };
 }
+
+// 5. Re-export Cloudflare R2 Operations
+export {
+  isR2Configured,
+  getR2BucketName,
+  getR2Client,
+  uploadFile,
+  getFileStream,
+  generatePresignedDownloadUrl,
+} from './r2Storage.js';

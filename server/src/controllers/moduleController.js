@@ -2,7 +2,7 @@ import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { cache } from '../utils/cache.js';
 import { io } from '../server.js';
-import { resolveMediaUrl } from '../utils/storage.js';
+import { resolveMediaUrl, uploadFile } from '../utils/storage.js';
 
 // ============================================================
 // LIST MODULES (public, all)
@@ -997,21 +997,24 @@ export async function uploadLessonMedia(req, res) {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No file received for lecture upload.' });
     }
-    const relativeUrl = `/uploads/lessons/${req.file.filename}`;
-    const resolvedUrl = resolveMediaUrl(relativeUrl, req);
-    logger.info(`Lecture file uploaded successfully: ${req.file.originalname} -> ${resolvedUrl} (${(req.file.size / (1024 * 1024)).toFixed(2)} MB)`);
+    const result = await uploadFile(req.file, 'lessons');
+    logger.info(`Lecture file uploaded successfully (${result.storageType}): ${req.file.originalname} -> ${result.fileUrl} (${(req.file.size / (1024 * 1024)).toFixed(2)} MB)`);
     return res.status(200).json({
       success: true,
-      fileUrl: resolvedUrl,
-      relativeUrl,
-      filename: req.file.filename,
-      originalName: req.file.originalname,
-      size: req.file.size,
-      mimetype: req.file.mimetype,
+      fileUrl: result.fileUrl,
+      relativeUrl: result.relativeUrl,
+      filename: result.filename,
+      originalName: result.originalName || req.file.originalname,
+      size: result.size,
+      mimetype: result.mimetype,
+      storageType: result.storageType,
     });
   } catch (error) {
     logger.error(`Upload Lesson Media Error: ${error.message}`);
-    return res.status(500).json({ success: false, message: 'Failed to upload lecture file.' });
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to upload lecture file.',
+    });
   }
 }
 

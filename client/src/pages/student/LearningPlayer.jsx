@@ -383,7 +383,8 @@ export default function LearningPlayer() {
   );
   const isPdfDocument = Boolean(
     currentLesson?.documentName?.toLowerCase().endsWith('.pdf') ||
-    resolvedMediaUrl?.toLowerCase().endsWith('.pdf')
+    resolvedMediaUrl?.split('?')[0].toLowerCase().endsWith('.pdf') ||
+    currentLesson?.videoUrl?.split('?')[0].toLowerCase().endsWith('.pdf')
   );
 
   if (loading) {

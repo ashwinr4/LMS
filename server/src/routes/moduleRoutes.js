@@ -43,20 +43,11 @@ const mediaFileFilter = (req, file, cb) => {
   cb(null, true);
 };
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const base = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
-    cb(null, `${Date.now()}-${base}${ext}`);
-  },
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
-  limits: { fileSize: 1024 * 1024 * 1024 }, // 1GB
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB memory safety for Render Free
   fileFilter: mediaFileFilter,
 });
 

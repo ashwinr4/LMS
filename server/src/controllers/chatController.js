@@ -1,7 +1,8 @@
 import { prisma } from '../utils/prisma.js';
 import { logger } from '../utils/logger.js';
 import { io } from '../server.js';
-import { resolveMediaUrl } from '../utils/storage.js';
+import { resolveMediaUrl, uploadFile } from '../utils/storage.js';
+import { cache } from '../utils/cache.js';
 import xss from 'xss';
 
 const userLastViewedAnnouncements = new Map();
@@ -203,21 +204,30 @@ export async function uploadChatFile(req, res) {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'NO_FILE', message: 'No file uploaded.' });
     }
-    const relativeUrl = `/uploads/chat/${req.file.filename}`;
-    const fileUrl = resolveMediaUrl(relativeUrl, req);
+    const result = await uploadFile(req.file, 'chat');
+    // Safely associate the temporary upload with its uploader for the pending window (30 minutes)
+    if (req.user?.id && result.filename) {
+      cache.set(`pending_chat:${result.filename}`, req.user.id, 1800);
+    }
+    logger.info(`Chat attachment uploaded successfully (${result.storageType}): ${req.file.originalname} -> ${result.fileUrl} (${(req.file.size / (1024 * 1024)).toFixed(2)} MB)`);
     return res.status(200).json({
       success: true,
       file: {
-        fileUrl,
-        relativeUrl,
-        fileName: req.file.originalname,
+        fileUrl: result.fileUrl,
+        relativeUrl: result.relativeUrl,
+        fileName: result.originalName || req.file.originalname,
         fileType: req.file.mimetype,
         fileSize: req.file.size,
+        storageType: result.storageType,
       },
     });
   } catch (error) {
     logger.error(`Chat File Upload Error: ${error.message}`);
-    return res.status(500).json({ success: false, error: 'UPLOAD_FAILED', message: 'Failed to upload chat file.' });
+    return res.status(500).json({
+      success: false,
+      error: 'UPLOAD_FAILED',
+      message: error.message || 'Failed to upload chat file.',
+    });
   }
 }
 

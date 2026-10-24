@@ -90,7 +90,16 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', uptime: Math.floor(process.uptime()), timestamp: new Date().toISOString() });
 });
 
-// Serve static uploaded course videos, documents, and media with HTTP Range streaming support and security headers
+app.use(compression());
+app.use(cookieParser());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Secure media streaming and authorized file retrieval (Cloudflare R2 + Local fallback)
+app.use('/uploads', mediaRoutes);
+app.use('/api/v1/media', mediaRoutes);
+
+// Fallback static files handler for any non-lesson, non-chat static assets
 app.use('/uploads', express.static(getUploadRootDir(), {
   acceptRanges: true,
   setHeaders: (res, filePath) => {
@@ -103,11 +112,6 @@ app.use('/uploads', express.static(getUploadRootDir(), {
     }
   },
 }));
-
-app.use(compression());
-app.use(cookieParser());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // 3. Global & Authentication Rate Limiters
 const globalLimiter = rateLimit({
@@ -142,9 +146,10 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// 5. Request Logging Middleware
+// 5. Request Logging Middleware (Path only, query credentials/tokens strictly excluded)
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.originalUrl} - IP: ${req.ip}`);
+  const requestPath = req.originalUrl ? req.originalUrl.split('?')[0] : req.path;
+  logger.info(`${req.method} ${requestPath} - IP: ${req.ip}`);
   next();
 });
 
@@ -170,6 +175,7 @@ import moderatorRoutes from './routes/moderatorRoutes.js';
 import chatRoutes from './routes/chatRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import transferRoutes from './routes/transferRoutes.js';
+import mediaRoutes from './routes/mediaRoutes.js';
 
 // 7. Mount Modular API Routes
 app.use('/api/v1/auth', authLimiter, authRoutes);
@@ -247,12 +253,19 @@ app.use((err, req, res, next) => {
     });
   }
 
-  // Handle Multer upload errors and rejected file extensions as client errors (400)
+  // Handle Multer upload errors (413 for oversized files, 400 for generic upload errors)
   if (err.name === 'MulterError') {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        success: false,
+        error: 'PAYLOAD_TOO_LARGE',
+        message: 'File size exceeds maximum allowable upload limit (100MB for course media, 50MB for chat).',
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'UPLOAD_ERROR',
-      message: err.code === 'LIMIT_FILE_SIZE' ? 'File size exceeds maximum allowable upload limit.' : err.message,
+      message: err.message,
     });
   }
 

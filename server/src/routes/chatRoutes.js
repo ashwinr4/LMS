@@ -13,20 +13,7 @@ import {
   getNotifications,
 } from '../controllers/chatController.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { getUploadDir } from '../utils/storage.js';
-
-const uploadDir = getUploadDir('chat');
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    const base = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
-    cb(null, `chat-${Date.now()}-${base}${ext}`);
-  },
-});
+const storage = multer.memoryStorage();
 
 const ALLOWED_CHAT_EXTENSIONS = [
   '.pdf', '.doc', '.docx', '.txt', '.csv', '.xlsx',
