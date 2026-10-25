@@ -80,11 +80,11 @@ Both the frontend and backend have been built, compiled, and executed in an isol
 | `JWT_REFRESH_SECRET` | **YES** | `authController.js` | Cryptographic secret for signing refresh tokens (min 32 characters). |
 | `JWT_ACCESS_EXPIRES_IN`| NO | `authController.js` | Access token lifespan (default: `15m`). |
 | `JWT_REFRESH_EXPIRES_IN`| NO | `authController.js` | Refresh token lifespan (default: `7d`). |
-| `SMTP_HOST` | NO | `server/src/utils/email.js` | SMTP host (e.g. `smtp.gmail.com`) for 2FA OTP & notifications. |
-| `SMTP_PORT` | NO | `server/src/utils/email.js` | SMTP port (e.g. `587`). |
-| `SMTP_USER` | NO | `server/src/utils/email.js` | SMTP account email. |
-| `SMTP_PASS` | NO | `server/src/utils/email.js` | SMTP App Password. |
-| `SMTP_FROM` | NO | `server/src/utils/email.js` | Outgoing sender display email. |
+| `SMTP_HOST` | NO | `server/src/utils/email.js` | Dedicated Brevo SMTP relay host (`smtp-relay.brevo.com`). |
+| `SMTP_PORT` | NO | `server/src/utils/email.js` | Brevo relay port (`587` for STARTTLS or `465` for SSL). |
+| `SMTP_USER` | **YES** | `server/src/utils/email.js` | Brevo SMTP login identifier (from Brevo SMTP & API keys page). |
+| `SMTP_PASS` | **YES** | `server/src/utils/email.js` | Active Brevo master SMTP key (`xsmtpsib-...`). |
+| `SMTP_FROM` | **YES** | `server/src/utils/email.js` | Authorized sender address verified in Brevo Dashboard under Senders. |
 | `GLOBAL_RATE_LIMIT_WINDOW_MS` | NO | `server/src/server.js` | Rate limit window in ms (default: `900000` = 15m). |
 | `GLOBAL_RATE_LIMIT_MAX` | NO | `server/src/server.js` | Max requests per IP per window (default: `500`). |
 
@@ -131,11 +131,11 @@ Because Qualiva is a monorepo containing `client/` and `server/`, it must be dep
   * `ACTIVE_BACKUP_ENGINE` = `mongodb`
   * `JWT_ACCESS_SECRET` = *(Generate a 32+ character random string)*
   * `JWT_REFRESH_SECRET` = *(Generate a 32+ character random string)*
-  * `SMTP_HOST` = `smtp.gmail.com`
+  * `SMTP_HOST` = `smtp-relay.brevo.com`
   * `SMTP_PORT` = `587`
-  * `SMTP_USER` = `thefallenx8@gmail.com`
-  * `SMTP_PASS` = `diwdwcoaktrtozcl`
-  * `SMTP_FROM` = `thefallenx8@gmail.com`
+  * `SMTP_USER` = *(Your Brevo SMTP login from app.brevo.com/settings/keys/smtp)*
+  * `SMTP_PASS` = *(Your active Brevo master SMTP key `xsmtpsib-...`)*
+  * `SMTP_FROM` = *(An authorized sender address verified in Brevo Dashboard under Senders & Domains)*
 
 ---
 

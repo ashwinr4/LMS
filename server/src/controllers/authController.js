@@ -203,22 +203,29 @@ export async function register(req, res) {
       }
 
       const emailResult = await sendOtpEmail(normalizedEmail, generatedOtp, name, 'Registration Verification');
-      if (!emailResult.delivered && process.env.NODE_ENV === 'production') {
-        logger.error(`Registration OTP delivery failed in production for: ${normalizedEmail} (${emailResult.error})`);
-        return res.status(503).json({
-          success: false,
-          error: 'EMAIL_DELIVERY_FAILED',
-          message: 'Unable to deliver verification code. Email delivery service is not configured or unavailable.',
-        });
+      if (!emailResult.delivered) {
+        if (emailResult.simulated) {
+          logger.info(`Registration OTP simulated in dev for: ${normalizedEmail}`);
+        } else {
+          logger.error(`Registration OTP delivery failed for: ${normalizedEmail} [${emailResult.error}: ${emailResult.errorDetails || emailResult.message}]`);
+          return res.status(503).json({
+            success: false,
+            error: 'EMAIL_DELIVERY_FAILED',
+            message: 'Unable to deliver verification code. Please check email service configuration or try again later.',
+          });
+        }
+      } else {
+        logger.info(`Registration OTP dispatched for: ${normalizedEmail}`);
       }
-
-      logger.info(`Registration OTP dispatched for: ${normalizedEmail}`);
 
       return res.status(200).json({
         success: true,
         requiresOtp: true,
+        simulated: Boolean(emailResult.simulated),
         email: normalizedEmail,
-        message: 'A 6-digit verification code has been dispatched to your email address.',
+        message: emailResult.simulated
+          ? 'Verification code generated (simulated in development mode; see server console).'
+          : 'A 6-digit verification code has been dispatched to your email address.',
       });
     }
 
@@ -334,7 +341,11 @@ export async function register(req, res) {
       });
     }
 
-    sendWelcomeEmail(verifiedUser.email, verifiedUser.name, verifiedUser.role).catch((welcomeErr) => {
+    sendWelcomeEmail(verifiedUser.email, verifiedUser.name, verifiedUser.role).then((res) => {
+      if (!res.delivered && !res.simulated) {
+        logger.warn(`Could not deliver welcome email to ${verifiedUser.email}: [${res.error}] ${res.errorDetails || res.message}`);
+      }
+    }).catch((welcomeErr) => {
       logger.warn(`Could not dispatch welcome email to ${verifiedUser.email}: ${welcomeErr.message}`);
     });
 
@@ -1021,20 +1032,27 @@ export async function requestOtp(req, res) {
 
     const emailContext = user.status === 'PENDING_VERIFICATION' ? 'Account Verification' : 'Password Reset';
     const emailResult = await sendOtpEmail(user.email, otp, user.name, emailContext);
-    if (!emailResult.delivered && process.env.NODE_ENV === 'production') {
-      logger.error(`OTP delivery failed in production for: ${user.email} (${emailResult.error})`);
-      return res.status(503).json({
-        success: false,
-        error: 'EMAIL_DELIVERY_FAILED',
-        message: 'Unable to deliver verification code. Email delivery service is not configured or unavailable.',
-      });
+    if (!emailResult.delivered) {
+      if (emailResult.simulated) {
+        logger.info(`OTP delivery simulated in dev for: ${user.email} (Context: ${emailContext})`);
+      } else {
+        logger.error(`OTP delivery failed for: ${user.email} [${emailResult.error}: ${emailResult.errorDetails || emailResult.message}]`);
+        return res.status(503).json({
+          success: false,
+          error: 'EMAIL_DELIVERY_FAILED',
+          message: 'Unable to deliver verification code. Please check email service configuration or try again later.',
+        });
+      }
+    } else {
+      logger.info(`OTP generated and dispatched for ${user.email} (Context: ${emailContext})`);
     }
-
-    logger.info(`OTP generated and dispatched for ${user.email} (Context: ${emailContext})`);
 
     return res.status(200).json({
       success: true,
-      message: 'A verification code has been dispatched to your email address.',
+      simulated: Boolean(emailResult.simulated),
+      message: emailResult.simulated
+        ? 'Verification code generated (simulated in development mode; see server console).'
+        : 'A verification code has been dispatched to your email address.',
     });
   } catch (error) {
     logger.error(`Request OTP Error: ${error.message}`);
@@ -1137,7 +1155,11 @@ export async function verifyOtp(req, res) {
         });
       }
 
-      sendWelcomeEmail(verifiedUser.email, verifiedUser.name, verifiedUser.role).catch((welcomeErr) => {
+      sendWelcomeEmail(verifiedUser.email, verifiedUser.name, verifiedUser.role).then((res) => {
+        if (!res.delivered && !res.simulated) {
+          logger.warn(`Could not deliver welcome email to ${verifiedUser.email}: [${res.error}] ${res.errorDetails || res.message}`);
+        }
+      }).catch((welcomeErr) => {
         logger.warn(`Could not dispatch welcome email to ${verifiedUser.email}: ${welcomeErr.message}`);
       });
 

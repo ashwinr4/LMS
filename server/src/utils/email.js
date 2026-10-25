@@ -3,12 +3,153 @@ import { logger } from './logger.js';
 
 let transporter = null;
 
-function getTransporter() {
+/**
+ * Mask an email address for safe logging without exposing PII
+ * @param {string} email
+ * @returns {string}
+ */
+export function maskEmail(email) {
+  if (!email || typeof email !== 'string') return '***';
+  const parts = email.split('@');
+  if (parts.length !== 2) return '***';
+  const name = parts[0];
+  const domain = parts[1];
+  const maskedName = name.length <= 2 ? name[0] + '*' : name.slice(0, 2) + '*'.repeat(Math.max(1, name.length - 2));
+  return `${maskedName}@${domain}`;
+}
+
+/**
+ * Classify SMTP and Nodemailer errors into actionable diagnostic categories
+ * @param {Error|object} error
+ * @returns {{ code: string, description: string, details: string }}
+ */
+export function classifySmtpError(error) {
+  if (!error) return { code: 'UNKNOWN_ERROR', description: 'Unknown email dispatch error.', details: '' };
+
+  const msg = (error.message || '').toLowerCase();
+  const response = (error.response || '').toLowerCase();
+  const errCode = (error.code || '').toUpperCase();
+  const responseCode = Number(error.responseCode);
+
+  // 1. Authentication Failure
+  if (
+    errCode === 'EAUTH' ||
+    responseCode === 535 ||
+    msg.includes('authentication failed') ||
+    msg.includes('invalid login') ||
+    msg.includes('bad credentials')
+  ) {
+    return {
+      code: 'SMTP_AUTH_FAILED',
+      description: 'SMTP authentication failed. Verify SMTP_USER and SMTP_PASS credentials in environment settings.',
+      details: error.message,
+    };
+  }
+
+  // 2. Sender Rejected / Unverified (Brevo 550 / 5.7.1 / sender not verified)
+  if (
+    responseCode === 550 ||
+    responseCode === 553 ||
+    msg.includes('sender address rejected') ||
+    response.includes('sender address rejected') ||
+    msg.includes('sender not validated') ||
+    response.includes('sender not validated') ||
+    msg.includes('not verified') ||
+    response.includes('not verified') ||
+    response.includes('5.7.1') ||
+    response.includes('5.7.26') ||
+    response.includes('5.7.27')
+  ) {
+    return {
+      code: 'SMTP_SENDER_REJECTED',
+      description: 'Sender address rejected by SMTP provider. Ensure SMTP_FROM is verified in your provider dashboard (e.g. Brevo Senders console).',
+      details: error.message,
+    };
+  }
+
+  // 3. Network Connection / Timeout Failure
+  if (
+    errCode === 'ETIMEDOUT' ||
+    errCode === 'ECONNREFUSED' ||
+    errCode === 'ESOCKET' ||
+    errCode === 'ECONNRESET' ||
+    errCode === 'ENOTFOUND' ||
+    msg.includes('timeout') ||
+    msg.includes('greeting never received')
+  ) {
+    return {
+      code: 'SMTP_CONNECTION_FAILED',
+      description: 'Could not connect to SMTP server. Verify SMTP_HOST, SMTP_PORT, and firewall/network egress.',
+      details: error.message,
+    };
+  }
+
+  // 4. Rate Limiting / Provider Quota
+  if (
+    responseCode === 421 ||
+    responseCode === 450 ||
+    responseCode === 451 ||
+    responseCode === 452 ||
+    msg.includes('rate limit') ||
+    msg.includes('quota exceeded') ||
+    msg.includes('too many messages')
+  ) {
+    return {
+      code: 'SMTP_RATE_LIMITED',
+      description: 'SMTP sending quota or rate limit exceeded on provider account.',
+      details: error.message,
+    };
+  }
+
+  // 5. Recipient Rejected
+  if (
+    responseCode === 551 ||
+    responseCode === 552 ||
+    responseCode === 554 ||
+    msg.includes('mailbox unavailable') ||
+    msg.includes('recipient rejected')
+  ) {
+    return {
+      code: 'SMTP_RECIPIENT_REJECTED',
+      description: 'Recipient address rejected by mail server.',
+      details: error.message,
+    };
+  }
+
+  // 6. Generic Dispatch Error
+  return {
+    code: 'SMTP_DISPATCH_ERROR',
+    description: 'Failed to deliver email through SMTP transport.',
+    details: error.message,
+  };
+}
+
+/**
+ * Resolve sender address, ensuring technical usernames are not inadvertently used as From headers
+ * @returns {string}
+ */
+export function getSenderAddress() {
+  const smtpUser = process.env.SMTP_USER || '';
+  const rawFrom = process.env.SMTP_FROM || '';
+
+  if (rawFrom) {
+    return rawFrom.includes('<') ? rawFrom : `"Qualiva Security" <${rawFrom}>`;
+  }
+
+  // If SMTP_FROM is not explicitly set, fallback to smtpUser only if it's not a technical Brevo relay user
+  if (smtpUser && !smtpUser.endsWith('@smtp-brevo.com')) {
+    return `"Qualiva Security" <${smtpUser}>`;
+  }
+
+  return `"Qualiva Security" <noreply@qualiva.local>`;
+}
+
+export function getTransporter() {
   if (!transporter) {
-    let host = process.env.SMTP_HOST || 'smtp-relay.brevo.com';
-    let port = parseInt(process.env.SMTP_PORT, 10) || 587;
-    let user = process.env.SMTP_USER;
-    let pass = process.env.SMTP_PASS;
+    const host = process.env.SMTP_HOST || 'smtp-relay.brevo.com';
+    const port = parseInt(process.env.SMTP_PORT, 10) || 587;
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
 
     if (user && pass) {
       transporter = nodemailer.createTransport({
@@ -19,8 +160,12 @@ function getTransporter() {
         pool: true,
         maxConnections: 5,
         maxMessages: 100,
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 15000,
       });
-      logger.info(`Live Email Transporter initialized with Brevo Relay: ${host}:${port} (User: ${user})`);
+      const maskedUser = maskEmail(user);
+      logger.info(`Live Email Transporter initialized with Brevo Relay: ${host}:${port} (User: ${maskedUser})`);
     } else {
       if (process.env.NODE_ENV === 'production') {
         logger.warn('SMTP credentials not configured in production environment. Live email dispatch is disabled.');
@@ -32,22 +177,54 @@ function getTransporter() {
   return transporter;
 }
 
+/**
+ * Verify SMTP connection and authentication handshake
+ * @returns {Promise<{ configured: boolean, ready: boolean, host?: string, port?: number, error?: string, message?: string, details?: string }>}
+ */
+export async function verifySmtpConnection() {
+  const mailer = getTransporter();
+  if (!mailer) {
+    return {
+      configured: false,
+      ready: false,
+      error: 'EMAIL_NOT_CONFIGURED',
+      message: 'SMTP credentials (SMTP_USER / SMTP_PASS) are not configured in environment.',
+    };
+  }
+
+  try {
+    const success = await mailer.verify();
+    return {
+      configured: true,
+      ready: Boolean(success),
+      host: process.env.SMTP_HOST || 'smtp-relay.brevo.com',
+      port: parseInt(process.env.SMTP_PORT, 10) || 587,
+    };
+  } catch (error) {
+    const classified = classifySmtpError(error);
+    return {
+      configured: true,
+      ready: false,
+      error: classified.code,
+      message: classified.description,
+      details: error.message,
+    };
+  }
+}
+
 export function isEmailConfigured() {
   return Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
 }
 
 export async function sendEmail({ to, subject, html, text }) {
+  const maskedRecipient = maskEmail(to);
   try {
     const mailer = getTransporter();
-    const smtpUser = process.env.SMTP_USER || 'noreply@qualiva.local';
-    const rawFrom = process.env.SMTP_FROM || smtpUser;
-    const fromAddress = rawFrom.includes('<')
-      ? rawFrom
-      : `"Qualiva Security" <${rawFrom}>`;
+    const fromAddress = getSenderAddress();
 
     if (!mailer) {
       if (process.env.NODE_ENV === 'production') {
-        logger.warn(`[EMAIL NOT CONFIGURED] Message delivery skipped for: ${to} | Subject: ${subject}`);
+        logger.warn(`[EMAIL NOT CONFIGURED] Message delivery skipped for: ${maskedRecipient} | Subject: ${subject}`);
         return {
           success: false,
           delivered: false,
@@ -57,7 +234,7 @@ export async function sendEmail({ to, subject, html, text }) {
         };
       }
 
-      logger.info(`[SIMULATED EMAIL DISPATCH - DEV ONLY] To: ${to} | Subject: ${subject}`);
+      logger.info(`[SIMULATED EMAIL DISPATCH - DEV ONLY] To: ${maskedRecipient} | Subject: ${subject}`);
       return {
         success: false,
         delivered: false,
@@ -77,7 +254,7 @@ export async function sendEmail({ to, subject, html, text }) {
       html,
     });
 
-    logger.info(`Live Email Dispatched successfully: MessageId=${info.messageId} to ${to}`);
+    logger.info(`Live Email Dispatched successfully: MessageId=${info.messageId} to ${maskedRecipient}`);
     return {
       success: true,
       delivered: true,
@@ -86,13 +263,15 @@ export async function sendEmail({ to, subject, html, text }) {
       message: 'Email successfully delivered.',
     };
   } catch (error) {
-    logger.error(`Failed to dispatch email to ${to}: ${error.message}`);
+    const classified = classifySmtpError(error);
+    logger.error(`Failed to dispatch email to ${maskedRecipient}: [${classified.code}] ${error.message}`);
     return {
       success: false,
       delivered: false,
       simulated: false,
-      error: error.message,
-      message: 'Failed to deliver email through SMTP transport.',
+      error: classified.code,
+      errorDetails: error.message,
+      message: classified.description,
     };
   }
 }
@@ -101,7 +280,7 @@ export async function sendOtpEmail(toEmail, otpCode, userName = 'Qualiva Member'
   const timeString = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
   const subject = `[Qualiva Code: ${otpCode}] Your Verification Passcode (${timeString})`;
   if (process.env.NODE_ENV !== 'production') {
-    logger.info(`🔑 [DEV 2FA OTP] Passcode for ${toEmail}: ${otpCode}`);
+    logger.info(`🔑 [DEV 2FA OTP] Passcode for ${maskEmail(toEmail)}: ${otpCode}`);
   }
   const text = `Hello ${userName},\n\nYour Qualiva verification code is: ${otpCode}\n\nThis code will expire in 10 minutes. If you did not initiate this request, you can safely ignore this email.\n\nQualiva Enterprise Platform`;
   

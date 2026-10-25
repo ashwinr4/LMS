@@ -53,11 +53,11 @@ services:
       - key: SMTP_PORT
         value: 587
       - key: SMTP_USER
-        sync: false # Brevo login email
+        sync: false # Brevo SMTP login identifier (e.g. bf6cd9001@smtp-brevo.com from app.brevo.com/settings/keys/smtp)
       - key: SMTP_PASS
-        sync: false # Brevo generated master SMTP key
+        sync: false # Brevo master SMTP key (xsmtpsib-...)
       - key: SMTP_FROM
-        sync: false # Brevo verified sender email
+        sync: false # Verified sender email in Brevo Senders console (e.g. "Qualiva Security" <sender@yourdomain.com>)
     # Persistent disk volume ensures uploaded videos, PDFs, and chat attachments survive redeployments:
     disk:
       name: qualiva-uploads

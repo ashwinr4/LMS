@@ -315,5 +315,20 @@ server.listen(PORT, '0.0.0.0', () => {
     } catch (err) {
       logger.warn(`Database pre-warm non-blocking warning: ${err.message}`);
     }
+
+    // Asynchronously verify SMTP connection and authentication handshake
+    try {
+      const { verifySmtpConnection } = await import('./utils/email.js');
+      const smtpStatus = await verifySmtpConnection();
+      if (smtpStatus.ready) {
+        logger.info(`📧 Live SMTP Transporter verified successfully (${smtpStatus.host}:${smtpStatus.port})`);
+      } else if (smtpStatus.configured) {
+        logger.warn(`📧 SMTP Handshake warning: [${smtpStatus.error}] ${smtpStatus.message || smtpStatus.details}`);
+      } else {
+        logger.info('📧 SMTP not configured: Simulated email mode active in development.');
+      }
+    } catch (smtpErr) {
+      logger.warn(`SMTP startup verification non-blocking warning: ${smtpErr.message}`);
+    }
   });
 });

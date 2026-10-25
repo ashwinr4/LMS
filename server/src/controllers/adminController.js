@@ -161,12 +161,21 @@ export async function createUser(req, res) {
     logger.info(`Admin ${req.user.email} created user: ${user.email} (${user.role})`);
     cache.invalidatePrefix('admin:');
 
-    // Asynchronously dispatch credentials email without blocking API response
-    sendUserProvisionedEmail(user.email, passwordToHash, user.name, user.role).catch((mailErr) => {
-      logger.warn(`Could not dispatch provisioned user credentials to ${user.email}: ${mailErr.message}`);
-    });
+    // Dispatch credentials email and track delivery
+    const emailResult = await sendUserProvisionedEmail(user.email, passwordToHash, user.name, user.role);
+    if (!emailResult.delivered && !emailResult.simulated) {
+      logger.warn(`Could not dispatch provisioned user credentials to ${user.email}: [${emailResult.error}] ${emailResult.errorDetails || emailResult.message}`);
+    }
 
-    return res.status(201).json({ success: true, message: 'User created successfully.', user });
+    return res.status(201).json({
+      success: true,
+      emailDelivered: Boolean(emailResult.delivered),
+      simulatedEmail: Boolean(emailResult.simulated),
+      message: emailResult.delivered
+        ? 'User created successfully. Temporary credentials emailed.'
+        : `User created successfully. Note: Credentials email ${emailResult.simulated ? 'was simulated (development mode)' : 'delivery failed or is not configured'}.`,
+      user,
+    });
   } catch (error) {
     logger.error(`Admin Create User Error: ${error.message}`);
     return res.status(500).json({ success: false, error: 'CREATE_FAILED', message: error.message });
@@ -1626,7 +1635,11 @@ export async function deleteUser(req, res) {
     }
 
     // 1. Dispatch Account Removal Notification Email to User
-    sendAccountDeletedEmail(user.email, user.name).catch((emailErr) => {
+    sendAccountDeletedEmail(user.email, user.name).then((res) => {
+      if (!res.delivered && !res.simulated) {
+        logger.warn(`Could not dispatch account deletion email to ${user.email}: [${res.error}] ${res.errorDetails || res.message}`);
+      }
+    }).catch((emailErr) => {
       logger.warn(`Could not dispatch account deletion email to ${user.email}: ${emailErr.message}`);
     });
 

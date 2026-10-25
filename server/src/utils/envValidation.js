@@ -54,6 +54,44 @@ export function validateEnvironmentConfig(env = process.env, options = {}) {
     warnings.push('PRODUCTION STORAGE NOTICE: Neither STORAGE_PATH nor UPLOAD_DIR is configured. Uploaded media is using ephemeral container storage and will not persist across redeployments. Mount a persistent disk volume for production media retention.');
   }
 
+  // 7. SMTP Email Configuration Validation & Deliverability Diagnostics
+  const smtpUser = env.SMTP_USER;
+  const smtpPass = env.SMTP_PASS;
+  const smtpHost = env.SMTP_HOST || 'smtp-relay.brevo.com';
+  const smtpPort = env.SMTP_PORT ? parseInt(env.SMTP_PORT, 10) : 587;
+  const smtpFrom = env.SMTP_FROM;
+
+  if (isProd) {
+    if (!smtpUser || !smtpPass) {
+      warnings.push('PRODUCTION EMAIL NOTICE: SMTP_USER or SMTP_PASS is missing in environment variables. Live email delivery (OTP passcodes, account provisioning, password recovery) will be disabled.');
+    }
+  }
+
+  if (smtpUser && smtpPass) {
+    if (isNaN(smtpPort) || ![25, 465, 587, 2525].includes(smtpPort)) {
+      warnings.push(`SMTP CONFIGURATION WARNING: SMTP_PORT (${env.SMTP_PORT}) is unusual. Expected standard SMTP ports are 587 (STARTTLS) or 465 (SSL).`);
+    }
+
+    if (smtpHost.includes('brevo.com') || smtpHost.includes('sendinblue.com')) {
+      if (smtpFrom && smtpFrom.includes('@smtp-brevo.com')) {
+        warnings.push('SMTP CONFIGURATION ERROR: SMTP_FROM appears to be set to a technical Brevo SMTP username (@smtp-brevo.com). Brevo requires a verified sender email address in SMTP_FROM, not the login identifier.');
+      }
+
+      if (smtpFrom) {
+        const fromEmailMatch = smtpFrom.match(/<([^>]+)>/) || [null, smtpFrom.trim()];
+        const fromEmail = fromEmailMatch[1] || '';
+        const domain = fromEmail.split('@')[1]?.toLowerCase();
+        const freeDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'icloud.com', 'aol.com'];
+
+        if (domain && freeDomains.includes(domain)) {
+          warnings.push(`SMTP DELIVERABILITY WARNING: SMTP_FROM uses a free webmail domain (@${domain}) with Brevo relay. Brevo requires this address to be explicitly verified in the Brevo Senders console (app.brevo.com/senders). Furthermore, major receiving inboxes may reject or spam emails due to DMARC/SPF misalignment. For reliable production delivery, an authenticated custom domain is strongly recommended.`);
+        }
+      } else {
+        warnings.push('SMTP CONFIGURATION WARNING: SMTP_FROM is not explicitly configured. Messages will fall back to default, which Brevo may reject. Set SMTP_FROM to an authorized, verified sender address in your Brevo account.');
+      }
+    }
+  }
+
   // Handle Errors
   if (errors.length > 0) {
     if (!silent) {
