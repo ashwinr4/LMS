@@ -499,6 +499,68 @@ export class MongoAdapter {
       }
     }
 
+    if (modelKey === 'section') {
+      if (include.module) {
+        result.module = await this.module.findUnique({
+          where: { id: doc.moduleId },
+          select: include.module.select,
+          include: include.module.include,
+        });
+      }
+      if (include.lessons) {
+        result.lessons = await this.lesson.findMany({
+          where: { sectionId: doc.id },
+          orderBy: include.lessons.orderBy || { order: 'asc' },
+          select: include.lessons.select,
+          include: include.lessons.include,
+        });
+      }
+    }
+
+    if (modelKey === 'lesson') {
+      if (include.section) {
+        result.section = await this.section.findUnique({
+          where: { id: doc.sectionId },
+          select: include.section.select,
+          include: include.section.include,
+        });
+      }
+    }
+
+    if (modelKey === 'certificate') {
+      if (include.user) {
+        result.user = await this.user.findUnique({
+          where: { id: doc.userId },
+          select: include.user.select,
+        });
+      }
+      if (include.module) {
+        result.module = await this.module.findUnique({
+          where: { id: doc.moduleId },
+          select: include.module.select,
+          include: include.module.include,
+        });
+      }
+    }
+
+    if (modelKey === 'activeSession') {
+      if (include.user) {
+        result.user = await this.user.findUnique({
+          where: { id: doc.userId },
+          select: include.user.select,
+        });
+      }
+    }
+
+    if (modelKey === 'transferRequest') {
+      if (include.user) {
+        result.user = await this.user.findUnique({
+          where: { id: doc.userId },
+          select: include.user.select,
+        });
+      }
+    }
+
     if (modelKey === 'courseEnrollmentRequest') {
       if (include.student) {
         result.student = await this.user.findUnique({

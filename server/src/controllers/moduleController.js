@@ -499,9 +499,17 @@ export async function updateSection(req, res) {
     }
 
     if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const parentModule =
+        existingSection.module ||
+        (existingSection.moduleId
+          ? await prisma.module.findUnique({
+              where: { id: existingSection.moduleId },
+              select: { createdBy: true, instructorId: true },
+            })
+          : null);
       const isOwner =
-        existingSection.module?.createdBy === req.user.id ||
-        existingSection.module?.instructorId === req.user.id;
+        parentModule?.createdBy === req.user.id ||
+        parentModule?.instructorId === req.user.id;
       if (!isOwner) {
         return res.status(403).json({
           success: false,
@@ -541,9 +549,17 @@ export async function deleteSection(req, res) {
     }
 
     if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const parentModule =
+        existingSection.module ||
+        (existingSection.moduleId
+          ? await prisma.module.findUnique({
+              where: { id: existingSection.moduleId },
+              select: { createdBy: true, instructorId: true },
+            })
+          : null);
       const isOwner =
-        existingSection.module?.createdBy === req.user.id ||
-        existingSection.module?.instructorId === req.user.id;
+        parentModule?.createdBy === req.user.id ||
+        parentModule?.instructorId === req.user.id;
       if (!isOwner) {
         return res.status(403).json({
           success: false,
@@ -587,9 +603,17 @@ export async function createLesson(req, res) {
     }
 
     if (req.user && req.user.role === 'COURSE_CREATOR') {
+      const parentModule =
+        section.module ||
+        (section.moduleId
+          ? await prisma.module.findUnique({
+              where: { id: section.moduleId },
+              select: { createdBy: true, instructorId: true },
+            })
+          : null);
       const isOwner =
-        section.module?.createdBy === req.user.id ||
-        section.module?.instructorId === req.user.id;
+        parentModule?.createdBy === req.user.id ||
+        parentModule?.instructorId === req.user.id;
       if (!isOwner) {
         return res.status(403).json({
           success: false,
@@ -635,9 +659,24 @@ export async function updateLesson(req, res) {
     }
 
     if (req.user && req.user.role === 'COURSE_CREATOR') {
+      let parentModule = existingLesson.section?.module;
+      if (!parentModule) {
+        const sec =
+          existingLesson.section ||
+          (existingLesson.sectionId
+            ? await prisma.section.findUnique({ where: { id: existingLesson.sectionId } })
+            : null);
+        if (sec?.moduleId) {
+          parentModule = await prisma.module.findUnique({
+            where: { id: sec.moduleId },
+            select: { createdBy: true, instructorId: true },
+          });
+        }
+      }
+
       const isOwner =
-        existingLesson.section?.module?.createdBy === req.user.id ||
-        existingLesson.section?.module?.instructorId === req.user.id;
+        parentModule?.createdBy === req.user.id ||
+        parentModule?.instructorId === req.user.id;
       if (!isOwner) {
         return res.status(403).json({
           success: false,
@@ -681,10 +720,28 @@ export async function deleteLesson(req, res) {
       return res.status(404).json({ success: false, message: 'Lesson not found.' });
     }
 
+    let targetModuleId = existingLesson.section?.moduleId;
+
     if (req.user && req.user.role === 'COURSE_CREATOR') {
+      let parentModule = existingLesson.section?.module;
+      if (!parentModule) {
+        const sec =
+          existingLesson.section ||
+          (existingLesson.sectionId
+            ? await prisma.section.findUnique({ where: { id: existingLesson.sectionId } })
+            : null);
+        if (sec?.moduleId) {
+          targetModuleId = sec.moduleId;
+          parentModule = await prisma.module.findUnique({
+            where: { id: sec.moduleId },
+            select: { createdBy: true, instructorId: true },
+          });
+        }
+      }
+
       const isOwner =
-        existingLesson.section?.module?.createdBy === req.user.id ||
-        existingLesson.section?.module?.instructorId === req.user.id;
+        parentModule?.createdBy === req.user.id ||
+        parentModule?.instructorId === req.user.id;
       if (!isOwner) {
         return res.status(403).json({
           success: false,
@@ -697,8 +754,13 @@ export async function deleteLesson(req, res) {
     await prisma.lesson.delete({ where: { id: lessonId } });
     cache.invalidatePrefix('modules:');
 
-    if (io && existingLesson?.section?.moduleId) {
-      io.to(`course_${existingLesson.section.moduleId}`).emit('curriculum_updated', { moduleId: existingLesson.section.moduleId });
+    if (!targetModuleId && existingLesson.sectionId) {
+      const sec = await prisma.section.findUnique({ where: { id: existingLesson.sectionId }, select: { moduleId: true } });
+      targetModuleId = sec?.moduleId;
+    }
+
+    if (io && targetModuleId) {
+      io.to(`course_${targetModuleId}`).emit('curriculum_updated', { moduleId: targetModuleId });
     }
 
     return res.status(200).json({ success: true, message: 'Lesson deleted.' });
