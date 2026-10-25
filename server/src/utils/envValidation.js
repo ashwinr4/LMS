@@ -54,7 +54,8 @@ export function validateEnvironmentConfig(env = process.env, options = {}) {
     warnings.push('PRODUCTION STORAGE NOTICE: Neither STORAGE_PATH nor UPLOAD_DIR is configured. Uploaded media is using ephemeral container storage and will not persist across redeployments. Mount a persistent disk volume for production media retention.');
   }
 
-  // 7. SMTP Email Configuration Validation & Deliverability Diagnostics
+  // 7. Email Service Configuration Validation & Deliverability Diagnostics
+  const brevoApiKey = env.BREVO_API_KEY || (env.SMTP_PASS && env.SMTP_PASS.startsWith('xkeysib-') ? env.SMTP_PASS : null);
   const smtpUser = env.SMTP_USER;
   const smtpPass = env.SMTP_PASS;
   const smtpHost = env.SMTP_HOST || 'smtp-relay.brevo.com';
@@ -62,14 +63,16 @@ export function validateEnvironmentConfig(env = process.env, options = {}) {
   const smtpFrom = env.SMTP_FROM;
 
   if (isProd) {
-    if (!smtpUser || !smtpPass) {
-      warnings.push('PRODUCTION EMAIL NOTICE: SMTP_USER or SMTP_PASS is missing in environment variables. Live email delivery (OTP passcodes, account provisioning, password recovery) will be disabled.');
+    if (!brevoApiKey && (!smtpUser || !smtpPass)) {
+      warnings.push('PRODUCTION EMAIL NOTICE: Neither BREVO_API_KEY nor SMTP credentials (SMTP_USER / SMTP_PASS) are configured in environment variables. Live email delivery (OTP passcodes, account provisioning, password recovery) will be disabled.');
+    } else if (!brevoApiKey && smtpPort === 587) {
+      warnings.push('RENDER PORT RESTRICTION NOTICE: Render Free Tier strictly blocks outbound traffic on SMTP ports 25, 465, and 587. If your service is on Render Free Tier, provide BREVO_API_KEY (operates over Port 443 HTTPS) or change SMTP_PORT to 2525.');
     }
   }
 
-  if (smtpUser && smtpPass) {
+  if (smtpUser && smtpPass && !brevoApiKey) {
     if (isNaN(smtpPort) || ![25, 465, 587, 2525].includes(smtpPort)) {
-      warnings.push(`SMTP CONFIGURATION WARNING: SMTP_PORT (${env.SMTP_PORT}) is unusual. Expected standard SMTP ports are 587 (STARTTLS) or 465 (SSL).`);
+      warnings.push(`SMTP CONFIGURATION WARNING: SMTP_PORT (${env.SMTP_PORT}) is unusual. Expected standard SMTP ports are 587 (STARTTLS), 465 (SSL), or 2525 (Alternative).`);
     }
 
     if (smtpHost.includes('brevo.com') || smtpHost.includes('sendinblue.com')) {

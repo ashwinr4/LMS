@@ -79,7 +79,7 @@ export function classifySmtpError(error) {
   ) {
     return {
       code: 'SMTP_CONNECTION_FAILED',
-      description: 'Could not connect to SMTP server. Verify SMTP_HOST, SMTP_PORT, and firewall/network egress.',
+      description: 'Could not connect to SMTP server. Note: Render Free Tier strictly blocks outbound SMTP ports (25, 465, 587). To resolve on Render Free Tier: set BREVO_API_KEY (operates over Port 443 HTTPS) or try SMTP_PORT=2525.',
       details: error.message,
     };
   }
@@ -144,6 +144,80 @@ export function getSenderAddress() {
   return `"Qualiva Security" <noreply@qualiva.local>`;
 }
 
+/**
+ * Detect Brevo REST API Key (from BREVO_API_KEY or if pasted into SMTP_PASS with xkeysib- prefix)
+ * @returns {string|null}
+ */
+export function getBrevoApiKey() {
+  if (process.env.BREVO_API_KEY && process.env.BREVO_API_KEY.trim()) {
+    return process.env.BREVO_API_KEY.trim();
+  }
+  if (process.env.SMTP_PASS && process.env.SMTP_PASS.trim().startsWith('xkeysib-')) {
+    return process.env.SMTP_PASS.trim();
+  }
+  return null;
+}
+
+/**
+ * Send transactional email via Brevo's official REST API over HTTPS (Port 443)
+ * Essential for cloud hosts like Render Free Tier that block outbound SMTP ports (25, 465, 587)
+ */
+export async function sendEmailViaBrevoApi({ to, subject, html, text }) {
+  const apiKey = getBrevoApiKey();
+  if (!apiKey) {
+    throw new Error('BREVO_API_KEY is not configured.');
+  }
+
+  const fromAddress = getSenderAddress();
+  const fromMatch = fromAddress.match(/^"?([^"<]+)"?\s*<([^>]+)>$/) || [null, 'Qualiva Security', fromAddress.replace(/[<>]/g, '').trim()];
+  const senderName = fromMatch[1]?.trim() || 'Qualiva Security';
+  const senderEmail = fromMatch[2]?.trim() || fromAddress.replace(/[<>]/g, '').trim();
+
+  const plainText = text || html.replace(/<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const payload = {
+    sender: { name: senderName, email: senderEmail },
+    to: [{ email: to }],
+    subject,
+    htmlContent: html,
+    textContent: plainText,
+  };
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'accept': 'application/json',
+      'content-type': 'application/json',
+      'api-key': apiKey,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (response.ok && data.messageId) {
+    logger.info(`Live Email Dispatched via Brevo HTTPS API (Port 443): MessageId=${data.messageId} to ${maskEmail(to)}`);
+    return {
+      success: true,
+      delivered: true,
+      simulated: false,
+      messageId: data.messageId,
+      message: 'Email successfully delivered via Brevo HTTPS API.',
+    };
+  }
+
+  const errorMsg = data.message || `Brevo API returned HTTP status ${response.status}`;
+  logger.error(`Brevo HTTPS API Error (${response.status}): ${errorMsg}`);
+  return {
+    success: false,
+    delivered: false,
+    simulated: false,
+    error: data.code || `BREVO_API_${response.status}`,
+    errorDetails: errorMsg,
+    message: errorMsg,
+  };
+}
+
 export function getTransporter() {
   if (!transporter) {
     const host = process.env.SMTP_HOST || 'smtp-relay.brevo.com';
@@ -178,17 +252,55 @@ export function getTransporter() {
 }
 
 /**
- * Verify SMTP connection and authentication handshake
- * @returns {Promise<{ configured: boolean, ready: boolean, host?: string, port?: number, error?: string, message?: string, details?: string }>}
+ * Verify email connection and authentication handshake (HTTPS API or SMTP Relay)
+ * @returns {Promise<{ configured: boolean, ready: boolean, provider?: string, host?: string, port?: number, error?: string, message?: string, details?: string }>}
  */
 export async function verifySmtpConnection() {
+  // 1. If Brevo HTTPS API key is available, test via HTTPS (Port 443)
+  const apiKey = getBrevoApiKey();
+  if (apiKey) {
+    try {
+      const res = await fetch('https://api.brevo.com/v3/account', {
+        headers: { 'accept': 'application/json', 'api-key': apiKey },
+      });
+      if (res.ok) {
+        const acc = await res.json().catch(() => ({}));
+        return {
+          configured: true,
+          ready: true,
+          provider: 'BREVO_HTTPS_API',
+          host: 'api.brevo.com:443 (HTTPS)',
+          port: 443,
+          email: acc.email,
+        };
+      }
+      const err = await res.json().catch(() => ({}));
+      return {
+        configured: true,
+        ready: false,
+        provider: 'BREVO_HTTPS_API',
+        error: 'BREVO_API_AUTH_FAILED',
+        message: err.message || 'Invalid Brevo API key.',
+      };
+    } catch (netErr) {
+      return {
+        configured: true,
+        ready: false,
+        provider: 'BREVO_HTTPS_API',
+        error: 'BREVO_API_NETWORK_ERROR',
+        message: netErr.message,
+      };
+    }
+  }
+
+  // 2. Otherwise test SMTP Relay connection
   const mailer = getTransporter();
   if (!mailer) {
     return {
       configured: false,
       ready: false,
       error: 'EMAIL_NOT_CONFIGURED',
-      message: 'SMTP credentials (SMTP_USER / SMTP_PASS) are not configured in environment.',
+      message: 'Email credentials (BREVO_API_KEY or SMTP_USER/SMTP_PASS) are not configured in environment.',
     };
   }
 
@@ -197,6 +309,7 @@ export async function verifySmtpConnection() {
     return {
       configured: true,
       ready: Boolean(success),
+      provider: 'SMTP_RELAY',
       host: process.env.SMTP_HOST || 'smtp-relay.brevo.com',
       port: parseInt(process.env.SMTP_PORT, 10) || 587,
     };
@@ -205,6 +318,7 @@ export async function verifySmtpConnection() {
     return {
       configured: true,
       ready: false,
+      provider: 'SMTP_RELAY',
       error: classified.code,
       message: classified.description,
       details: error.message,
@@ -213,11 +327,30 @@ export async function verifySmtpConnection() {
 }
 
 export function isEmailConfigured() {
-  return Boolean(process.env.SMTP_USER && process.env.SMTP_PASS);
+  return Boolean(getBrevoApiKey() || (process.env.SMTP_USER && process.env.SMTP_PASS));
 }
 
 export async function sendEmail({ to, subject, html, text }) {
   const maskedRecipient = maskEmail(to);
+
+  // 1. If Brevo API Key is present, dispatch via HTTPS REST API (Port 443 - Bypasses Render Port Restrictions)
+  if (getBrevoApiKey()) {
+    try {
+      return await sendEmailViaBrevoApi({ to, subject, html, text });
+    } catch (apiError) {
+      logger.error(`Brevo API Dispatch failed for ${maskedRecipient}: ${apiError.message}`);
+      return {
+        success: false,
+        delivered: false,
+        simulated: false,
+        error: 'BREVO_API_ERROR',
+        errorDetails: apiError.message,
+        message: apiError.message,
+      };
+    }
+  }
+
+  // 2. Otherwise dispatch via SMTP Transporter (Nodemailer)
   try {
     const mailer = getTransporter();
     const fromAddress = getSenderAddress();
