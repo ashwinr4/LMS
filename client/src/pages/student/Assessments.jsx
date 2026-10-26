@@ -18,6 +18,7 @@ import {
   BookOpen,
   ArrowRight,
   Eye,
+  RotateCcw,
 } from 'lucide-react';
 
 export default function Assessments() {
@@ -67,6 +68,11 @@ export default function Assessments() {
   }, [socket, fetchExams]);
 
   const handleStartExam = (exam) => {
+    const hasPassed = exam.hasPassed || exam.isPassed || exam.lastSubmission?.passed || !!exam.certificate;
+    if (hasPassed) {
+      navigate('/certificates');
+      return;
+    }
     setSelectedExam(exam);
     setShowConsentModal(true);
   };
@@ -116,8 +122,9 @@ export default function Assessments() {
       ) : (
         <div className="space-y-6">
           {exams.map((exam) => {
-            const hasPassed = exam.lastSubmission?.passed || !!exam.certificate;
+            const hasPassed = exam.hasPassed || exam.isPassed || exam.lastSubmission?.passed || !!exam.certificate;
             const score = exam.lastSubmission?.score || exam.certificate?.scoreAchieved;
+            const isRetake = !hasPassed && exam.lastSubmission && !exam.lastSubmission.passed;
 
             return (
               <div
@@ -193,7 +200,17 @@ export default function Assessments() {
 
                 {/* Action CTA */}
                 <div className="flex flex-col sm:flex-row lg:flex-col items-stretch lg:items-end justify-center gap-2.5 shrink-0 min-w-[200px]">
-                  {exam.cooldown ? (
+                  {hasPassed ? (
+                    <Button
+                      variant="primary"
+                      size="md"
+                      leftIcon={<Award className="h-4 w-4" />}
+                      onClick={() => navigate('/certificates')}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm font-semibold"
+                    >
+                      View Certificate (Passed)
+                    </Button>
+                  ) : exam.cooldown ? (
                     <Button
                       variant="secondary"
                       size="md"
@@ -205,25 +222,15 @@ export default function Assessments() {
                         ? `Locked (${exam.cooldown.formattedTime})`
                         : `Cooldown (${exam.cooldown.formattedTime})`}
                     </Button>
-                  ) : hasPassed ? (
-                    <Button
-                      variant="primary"
-                      size="md"
-                      leftIcon={<Award className="h-4 w-4" />}
-                      onClick={() => navigate('/certificates')}
-                      className="w-full"
-                    >
-                      View Certificate
-                    </Button>
                   ) : exam.isUnlocked ? (
                     <Button
                       variant="primary"
                       size="md"
-                      leftIcon={<Play className="h-4 w-4" />}
+                      leftIcon={isRetake ? <RotateCcw className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                       onClick={() => handleStartExam(exam)}
                       className="w-full shadow-md"
                     >
-                      Start Proctored Exam
+                      {isRetake ? 'Retake Exam' : 'Start Proctored Exam'}
                     </Button>
                   ) : (
                     <Button

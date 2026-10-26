@@ -289,14 +289,38 @@ export default function ExamRoom() {
   }
 
   if (error || !session) {
+    const isAlreadyPassed = error && (error.toLowerCase().includes('already passed') || error.toLowerCase().includes('already completed'));
     return (
       <div className="max-w-xl mx-auto my-16 p-8 bg-card border border-app rounded-card text-center space-y-4">
-        <AlertTriangle className="h-12 w-12 text-red-500 mx-auto" />
-        <h2 className="text-lg font-bold text-app">Exam Access Denied</h2>
-        <p className="text-sm text-app-secondary">{error || 'Unable to load proctored session.'}</p>
-        <Button variant="primary" onClick={() => navigate('/assessments')} leftIcon={<ArrowLeft className="h-4 w-4" />}>
-          Back to Assessments
-        </Button>
+        {isAlreadyPassed ? (
+          <CheckCircle2 className="h-12 w-12 text-emerald-500 mx-auto" />
+        ) : (
+          <AlertTriangle className="h-12 w-12 text-red-500 mx-auto" />
+        )}
+        <h2 className="text-lg font-bold text-app">
+          {isAlreadyPassed ? 'Exam Already Passed' : 'Exam Access Denied'}
+        </h2>
+        <p className="text-sm text-app-secondary">
+          {error || 'Unable to load proctored session.'}
+        </p>
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+          {isAlreadyPassed && (
+            <Button
+              variant="primary"
+              onClick={() => navigate('/certificates')}
+              leftIcon={<Award className="h-4 w-4" />}
+            >
+              View Certificate
+            </Button>
+          )}
+          <Button
+            variant={isAlreadyPassed ? 'outline' : 'primary'}
+            onClick={() => navigate('/assessments')}
+            leftIcon={<ArrowLeft className="h-4 w-4" />}
+          >
+            Back to Assessments
+          </Button>
+        </div>
       </div>
     );
   }

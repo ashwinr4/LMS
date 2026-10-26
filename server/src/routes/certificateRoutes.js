@@ -5,7 +5,8 @@ import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Public Verification Endpoint
+// Public Verification Endpoints (supports both path param and query params ?code= or ?id=)
+router.get('/verify', verifyCertificate);
 router.get('/verify/:code', verifyCertificate);
 
 // Student Authenticated Endpoint

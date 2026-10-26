@@ -438,9 +438,11 @@ export async function getMyExams(req, res) {
         const progress = assignment?.progress || 0;
         const cert = certMap[a.moduleId] || null;
         const isUnlocked = progress >= 80;
+        const hasPassed = subs.some((s) => s.passed) || !!cert;
 
         let cooldown = null;
-        if (lastSubmission && !lastSubmission.passed) {
+        // Cooldowns only apply to students who have NOT passed and need to wait before re-attempting
+        if (!hasPassed && lastSubmission && !lastSubmission.passed) {
           let feedbackData = {};
           try {
             feedbackData = JSON.parse(lastSubmission.feedback || '{}');
@@ -487,6 +489,8 @@ export async function getMyExams(req, res) {
           questionCount: JSON.parse(a.questions || '[]').length,
           isUnlocked,
           courseProgress: progress,
+          hasPassed: Boolean(hasPassed),
+          isPassed: Boolean(hasPassed),
           certificate: cert,
           cooldown,
           lastSubmission: lastSubmission
@@ -538,7 +542,24 @@ export async function startExam(req, res) {
       });
     }
 
-    // ── Enforce 1-Hour and 7-Day Cooldowns on Re-attempts ──
+    // ── Prevent Re-attend if Already Passed ──
+    // Candidates can only re-attend if they fail. Once passed, they cannot re-attend.
+    const alreadyPassedSubmission = await prisma.assessmentSubmission.findFirst({
+      where: { assessmentId: assessment.id, userId, passed: true },
+    });
+    const existingCertificate = await prisma.certificate.findFirst({
+      where: { userId, moduleId: assessment.moduleId },
+    });
+
+    if (alreadyPassedSubmission || existingCertificate) {
+      return res.status(403).json({
+        success: false,
+        error: 'ALREADY_PASSED',
+        message: 'You have already passed this exam and received your official certificate. Retakes are not permitted once passed.',
+      });
+    }
+
+    // ── Enforce 1-Hour and 7-Day Cooldowns on Re-attempts (Failed Candidates Only) ──
     const lastAttempt = await prisma.assessmentSubmission.findFirst({
       where: { assessmentId: assessment.id, userId },
       orderBy: { submittedAt: 'desc' },
@@ -696,11 +717,14 @@ export async function submitExam(req, res) {
     const alreadyPassed = await prisma.assessmentSubmission.findFirst({
       where: { assessmentId: id, userId, passed: true },
     });
-    if (alreadyPassed) {
+    const existingCertCheck = await prisma.certificate.findFirst({
+      where: { userId, moduleId: assessment.moduleId },
+    });
+    if (alreadyPassed || existingCertCheck) {
       return res.status(400).json({
         success: false,
         error: 'ALREADY_PASSED',
-        message: 'You have already completed and passed this assessment.',
+        message: 'You have already completed and passed this assessment. Retakes are not permitted.',
       });
     }
 
@@ -903,8 +927,26 @@ export async function submitExam(req, res) {
       if (!existingCert) {
         const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
         const year = new Date().getFullYear();
-        const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
-        const certCode = `ESMMS-CERT-${year}-${randomHex}`;
+        
+        // Generate guaranteed unique certificate code with collision checking
+        let certCode = null;
+        let isUnique = false;
+        let attempts = 0;
+        while (!isUnique && attempts < 10) {
+          attempts++;
+          const randomHex = crypto.randomBytes(4).toString('hex').toUpperCase();
+          const candidateCode = `ESMMS-CERT-${year}-${randomHex}`;
+          const conflict = await prisma.certificate.findFirst({
+            where: { certificateCode: candidateCode },
+          });
+          if (!conflict) {
+            certCode = candidateCode;
+            isUnique = true;
+          }
+        }
+        if (!certCode) {
+          certCode = `ESMMS-CERT-${year}-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+        }
 
         const hashPayload = `${certCode}|${userId}|${assessment.moduleId}|${score}|${new Date().toISOString()}`;
         const verificationHash = crypto.createHash('sha256').update(hashPayload).digest('hex');
@@ -1089,6 +1131,21 @@ export async function exitExam(req, res) {
         success: false,
         error: 'NOT_ENROLLED',
         message: 'You are not enrolled in the course for this assessment.',
+      });
+    }
+
+    // Prevent exit submission if candidate has already completed and passed
+    const alreadyPassed = await prisma.assessmentSubmission.findFirst({
+      where: { assessmentId: id, userId, passed: true },
+    });
+    const existingCert = await prisma.certificate.findFirst({
+      where: { userId, moduleId: assessment.moduleId },
+    });
+    if (alreadyPassed || existingCert) {
+      return res.status(400).json({
+        success: false,
+        error: 'ALREADY_PASSED',
+        message: 'You have already completed and passed this assessment.',
       });
     }
 

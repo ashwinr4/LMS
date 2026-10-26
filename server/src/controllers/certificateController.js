@@ -3,9 +3,9 @@ import { logger } from '../utils/logger.js';
 
 export async function verifyCertificate(req, res) {
   try {
-    const { code } = req.params;
+    const rawCode = req.params.code || req.query.code || req.query.id;
 
-    if (!code) {
+    if (!rawCode || typeof rawCode !== 'string' || !rawCode.trim()) {
       return res.status(400).json({
         success: false,
         error: 'CERTIFICATE_CODE_REQUIRED',
@@ -13,9 +13,30 @@ export async function verifyCertificate(req, res) {
       });
     }
 
+    // Cleanse input: if candidate or verifier pastes a full URL, extract the code
+    let cleanCode = rawCode.trim();
+    if (cleanCode.includes('http://') || cleanCode.includes('https://') || cleanCode.includes('?')) {
+      const match = cleanCode.match(/[?&](?:code|id)=([^&]+)/i);
+      if (match && match[1]) {
+        cleanCode = decodeURIComponent(match[1]).trim();
+      } else {
+        const segments = cleanCode.split('/').filter(Boolean);
+        if (segments.length > 0 && segments[segments.length - 1] !== 'verify') {
+          cleanCode = segments[segments.length - 1].split('?')[0].trim();
+        }
+      }
+    }
+
+    // Lookup by Certificate Code, Verification Hash, or Database ID
     const certificate = await prisma.certificate.findFirst({
       where: {
-        certificateCode: code.toUpperCase().trim(),
+        OR: [
+          { certificateCode: cleanCode.toUpperCase() },
+          { certificateCode: cleanCode },
+          { verificationHash: cleanCode.toLowerCase() },
+          { verificationHash: cleanCode },
+          { id: cleanCode },
+        ],
       },
       include: {
         user: {
@@ -40,8 +61,20 @@ export async function verifyCertificate(req, res) {
       return res.status(404).json({
         success: false,
         error: 'CERTIFICATE_NOT_FOUND',
-        message: `No certificate record found for code ${code}. Please verify the code and try again.`,
+        message: `No certificate record found for code "${cleanCode}". Please verify the code and try again.`,
       });
+    }
+
+    // Ensure department resolution
+    let department = certificate.module?.department || certificate.user?.department;
+    if (!department && certificate.moduleId) {
+      try {
+        const mod = await prisma.module.findUnique({
+          where: { id: certificate.moduleId },
+          select: { department: true },
+        });
+        if (mod?.department) department = mod.department;
+      } catch (e) {}
     }
 
     return res.status(200).json({
@@ -56,7 +89,7 @@ export async function verifyCertificate(req, res) {
         status: certificate.status,
         verificationHash: certificate.verificationHash,
         issuedAt: certificate.issuedAt,
-        department: certificate.module?.department || certificate.user?.department || 'General',
+        department: department || 'Enterprise Training',
       },
     });
   } catch (error) {

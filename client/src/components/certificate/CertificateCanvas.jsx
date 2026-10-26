@@ -227,10 +227,11 @@ export function CertificateCanvas({
           },
         });
         qrImg = new Image();
-        qrImg.src = qrDataUrl;
-        await new Promise((res) => {
-          qrImg.onload = res;
-          qrImg.onerror = res;
+        await new Promise((resolve) => {
+          qrImg.onload = () => resolve();
+          qrImg.onerror = () => resolve();
+          qrImg.src = qrDataUrl;
+          if (qrImg.complete) resolve();
         });
       } catch (err) {
         console.error('Failed to generate QR code:', err);
@@ -241,7 +242,6 @@ export function CertificateCanvas({
       // 2. Load the template image
       const img = new Image();
       img.crossOrigin = 'anonymous';
-      img.src = templateUrl;
 
       const drawContent = (hasTemplate) => {
         ctx.clearRect(0, 0, width, height);
@@ -347,6 +347,10 @@ export function CertificateCanvas({
 
       img.onload = () => drawContent(true);
       img.onerror = () => drawContent(false);
+      img.src = templateUrl;
+      if (img.complete && img.naturalWidth > 0) {
+        drawContent(true);
+      }
     };
 
     renderCertificate();
